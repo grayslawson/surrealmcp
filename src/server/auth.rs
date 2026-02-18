@@ -250,6 +250,7 @@ struct JweHeader {
 
 /// JWT header structure
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct JwtHeader {
     /// The algorithm used to sign the token
     alg: String,

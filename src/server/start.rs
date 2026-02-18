@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::net::{TcpListener, UnixListener};
-use tokio::signal;
+use tokio_util::sync::CancellationToken;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing::{debug, error, info, warn};
 
@@ -47,35 +47,22 @@ pub struct ServerConfig {
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
-/// Handle double ctrl-c shutdown with force quit
-async fn handle_double_ctrl_c() {
-    let mut ctrl_c_count = 0;
-    let mut interval = tokio::time::interval(Duration::from_secs(2));
-
-    loop {
-        tokio::select! {
-            _ = signal::ctrl_c() => {
-                ctrl_c_count += 1;
-                if ctrl_c_count == 1 {
-                    info!("Received first Ctrl+C signal. Press Ctrl+C again within 2 seconds to force quit.");
-                    interval.reset();
-                } else if ctrl_c_count >= 2 {
-                    warn!("Received second Ctrl+C signal. Force quitting immediately.");
-                    std::process::exit(1);
-                }
-            }
-            _ = interval.tick() => {
-                if ctrl_c_count > 0 {
-                    info!("Ctrl+C timeout expired. Resuming normal operation.");
-                    ctrl_c_count = 0;
-                }
-            }
-        }
-    }
-}
 
 /// Start the MCP server based on the provided configuration
 pub async fn start_server(config: ServerConfig) -> Result<()> {
+    let token = CancellationToken::new();
+    let shutdown_token = token.clone();
+
+    // Handle Ctrl+C globally
+    tokio::spawn(async move {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            error!("Failed to listen for Ctrl+C: {}", e);
+        } else {
+            info!("Shutdown signal received, triggering cancellation");
+            shutdown_token.cancel();
+        }
+    });
+
     // Output debugging information
     info!(
         endpoint = config.endpoint.as_deref(),
@@ -94,11 +81,11 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
     );
     match (config.bind_address.is_some(), config.socket_path.is_some()) {
         // We are running as a STDIO server
-        (false, false) => start_stdio_server(config).await,
+        (false, false) => start_stdio_server(config, token).await,
         // We are running as a HTTP server
-        (true, false) => start_http_server(config).await,
+        (true, false) => start_http_server(config, token).await,
         // We are running as a Unix socket
-        (false, true) => start_unix_server(config).await,
+        (false, true) => start_unix_server(config, token).await,
         // This should never happen due to CLI argument groups
         (true, true) => Err(anyhow!(
             "Cannot specify both --bind-address and --socket-path"
@@ -107,7 +94,7 @@ pub async fn start_server(config: ServerConfig) -> Result<()> {
 }
 
 /// Start the MCP server in stdio mode
-async fn start_stdio_server(config: ServerConfig) -> Result<()> {
+async fn start_stdio_server(config: ServerConfig, token: CancellationToken) -> Result<()> {
     // Extract configuration values
     let ServerConfig {
         endpoint,
@@ -144,8 +131,7 @@ async fn start_stdio_server(config: ServerConfig) -> Result<()> {
             "Failed to initialize database connection"
         );
     }
-    // Spawn the double ctrl-c handler
-    let _signal = tokio::spawn(handle_double_ctrl_c());
+
     // Create an MCP server instance for stdin/stdout
     match rmcp::serve_server(service.clone(), (tokio::io::stdin(), tokio::io::stdout())).await {
         Ok(server) => {
@@ -153,12 +139,21 @@ async fn start_stdio_server(config: ServerConfig) -> Result<()> {
                 connection_id = %service.connection_id,
                 "MCP server instance creation succeeded"
             );
-            // Wait for the server to complete its work
-            let _ = server.waiting().await;
-            info!(
-                connection_id = %service.connection_id,
-                "MCP server completed"
-            );
+            // Wait for either the server to complete or the global token to cancel
+            tokio::select! {
+                _ = server.waiting() => {
+                    info!(
+                        connection_id = %service.connection_id,
+                        "MCP server completed"
+                    );
+                }
+                _ = token.cancelled() => {
+                    info!(
+                        connection_id = %service.connection_id,
+                        "Shutdown signal received, stopping MCP server"
+                    );
+                }
+            }
         }
         Err(e) => {
             error!(
@@ -173,7 +168,7 @@ async fn start_stdio_server(config: ServerConfig) -> Result<()> {
 }
 
 /// Start the MCP server in Unix socket mode
-async fn start_unix_server(config: ServerConfig) -> Result<()> {
+async fn start_unix_server(config: ServerConfig, token: CancellationToken) -> Result<()> {
     // Extract configuration values
     let ServerConfig {
         endpoint,
@@ -207,12 +202,17 @@ async fn start_unix_server(config: ServerConfig) -> Result<()> {
         socket_path = %socket_path.display(),
         "Starting MCP server in Unix socket mode"
     );
-    // Spawn the double ctrl-c handler
-    let _signal = tokio::spawn(handle_double_ctrl_c());
+
     // Main server loop for Unix socket connections
     loop {
-        // Accept incoming connections from the Unix socket
-        let (stream, addr) = listener.accept().await?;
+        // Accept incoming connections or wait for cancellation
+        let (stream, addr) = tokio::select! {
+            res = listener.accept() => res?,
+            _ = token.cancelled() => {
+                info!("Unix socket server shutting down");
+                return Ok(());
+            }
+        };
         // Generate a connection ID for this connection
         let connection_id = generate_connection_id();
         // Output debugging information
@@ -242,6 +242,7 @@ async fn start_unix_server(config: ServerConfig) -> Result<()> {
         let cloud_access_token = cloud_access_token.clone();
         let cloud_refresh_token = cloud_refresh_token.clone();
         // Spawn a new async task to handle this client connection
+        let connection_token = token.clone();
         tokio::spawn(async move {
             let _span =
                 tracing::info_span!("handle_unix_connection", connection_id = %connection_id);
@@ -273,8 +274,21 @@ async fn start_unix_server(config: ServerConfig) -> Result<()> {
                         connection_id = %service.connection_id,
                         "MCP server instance creation succeeded"
                     );
-                    // Wait for the server to complete its work
-                    let _ = server.waiting().await;
+                    // Wait for either the server to complete or the global token to cancel
+                    tokio::select! {
+                        _ = server.waiting() => {
+                            info!(
+                                connection_id = %service.connection_id,
+                                "MCP server connection completed"
+                            );
+                        }
+                        _ = connection_token.cancelled() => {
+                            info!(
+                                connection_id = %service.connection_id,
+                                "Shutdown signal received, closing MCP connection"
+                            );
+                        }
+                    }
                     // Update metrics when connection closes
                     let active_connections = ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::SeqCst) - 1;
                     gauge!("surrealmcp.active_connections").set(active_connections as f64);
@@ -303,7 +317,7 @@ async fn start_unix_server(config: ServerConfig) -> Result<()> {
 }
 
 /// Start the MCP server in HTTP mode
-async fn start_http_server(config: ServerConfig) -> Result<()> {
+async fn start_http_server(config: ServerConfig, token: CancellationToken) -> Result<()> {
     // Extract configuration values
     let ServerConfig {
         endpoint,
@@ -383,6 +397,8 @@ async fn start_http_server(config: ServerConfig) -> Result<()> {
         StreamableHttpServerConfig {
             stateful_mode: true,
             sse_keep_alive: None,
+            sse_retry: Some(Duration::from_secs(1)),
+            cancellation_token: token.clone(),
         },
     );
     // Create rate limiting layer with metrics
@@ -443,11 +459,12 @@ async fn start_http_server(config: ServerConfig) -> Result<()> {
             require_bearer_auth(config, req, next)
         }));
     }
-    // Use the shared double ctrl-c handler
-    let signal = handle_double_ctrl_c();
     // Serve the Axum router over HTTP
     axum::serve(listener, router)
-        .with_graceful_shutdown(signal)
+        .with_graceful_shutdown(async move {
+            token.cancelled().await;
+            info!("Shutting down HTTP server");
+        })
         .await?;
     // All ok
     Ok(())

@@ -21,7 +21,7 @@ reqwest = { version = "0.12.23", default-features = false, features = [
     "rustls-tls",
 ] }
 ring = "0.17.14"
-rmcp = { version = "0.6.0", features = [
+rmcp = { version = "0.15.0", features = [
     "server",
     "macros",
     "transport-streamable-http-server",
@@ -31,16 +31,15 @@ rustls = "0.23.31"
 schemars = "1.0.4"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.143"
-surrealdb = { version = "2.3.7", features = [
+surrealdb = { version = "3.0.0", default-features = false, features = [
     "rustls",
     "kv-mem",
-    "kv-rocksdb",
-    "kv-surrealkv",
     "protocol-ws",
     "protocol-http",
     "http",
 ] }
 tokio = { version = "1.47.1", features = ["full"] }
+tokio-util = { version = "0.7.13", features = ["full"] }
 tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["trace", "cors"] }
 tower_governor = "0.8.0"
