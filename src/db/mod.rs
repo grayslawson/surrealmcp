@@ -13,13 +13,13 @@ pub async fn create_client_connection(
 ) -> Result<Surreal<Any>, anyhow::Error> {
     // Output debugging information
     debug!("Attempting to connect to SurrealDB");
-    
+
     // Connect to SurrealDB using the Any engine.
     // In v3, config can be passed via the builder or as part of the endpoint.
     let instance = any::connect(url)
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
-    
+
     // Output debugging information
     debug!("Successfully connected to SurrealDB instance");
     // Attempt to authenticate if specified
@@ -70,12 +70,12 @@ pub async fn create_client_connection_with_token(
 ) -> Result<Surreal<Any>, anyhow::Error> {
     // Output debugging information
     debug!("Attempting to connect to SurrealDB with token");
-    
+
     // Connect to SurrealDB using the Any engine.
     let instance = any::connect(url)
         .await
         .map_err(|e| anyhow!(e.to_string()))?;
-    
+
     // Output debugging information
     debug!("Successfully connected to SurrealDB instance");
     // Authenticate with the token
