@@ -42,16 +42,16 @@ pub fn format_duration(duration: std::time::Duration) -> String {
 pub async fn check_health(db: &Surreal<Any>) -> anyhow::Result<(bool, String)> {
     // Perform INFO FOR ROOT; query
     let _response = db.query("INFO FOR ROOT;").await?;
-    
+
     // In SurrealDB v3, INFO FOR ROOT should succeed if we are authenticated as root.
     // However, if we are not authenticated, it might fail.
     // A simpler way to get the version is db.version().
     let version = db.version().await?;
     let version_str = version.to_string();
-    
+
     // Check if it's a 3.x instance
     let is_v3 = version_str.starts_with('3');
-    
+
     if is_v3 {
         Ok((true, version_str))
     } else {
@@ -88,8 +88,15 @@ pub fn convert_json_to_surreal(
     value: impl Into<serde_json::Value>,
     name: &str,
 ) -> Result<Value, String> {
-    let json_value = value.into();
-    
+    convert_json_to_surreal_recursive(value.into())
+        .map_err(|e| format!("Failed to convert parameter '{name}{e}'"))
+}
+
+/// Internal recursive conversion function that avoids eager string formatting for paths.
+/// String paths are only constructed on the error path using `map_err`.
+fn convert_json_to_surreal_recursive(
+    json_value: serde_json::Value,
+) -> Result<Value, String> {
     match json_value {
         serde_json::Value::Null => Ok(Value::None),
         serde_json::Value::Bool(b) => Ok(Value::Bool(b)),
@@ -106,14 +113,17 @@ pub fn convert_json_to_surreal(
         serde_json::Value::Array(a) => {
             let mut vals = Vec::with_capacity(a.len());
             for (i, v) in a.into_iter().enumerate() {
-                vals.push(convert_json_to_surreal(v, &format!("{name}[{i}]"))?);
+                vals.push(convert_json_to_surreal_recursive(v)
+                    .map_err(|e| format!("[{i}]{e}"))?);
             }
             Ok(Value::Array(Array::from(vals)))
         }
         serde_json::Value::Object(o) => {
             let mut map = std::collections::BTreeMap::new();
             for (k, v) in o {
-                map.insert(k.clone(), convert_json_to_surreal(v, &format!("{name}.{k}"))?);
+                let val = convert_json_to_surreal_recursive(v)
+                    .map_err(|e| format!(".{k}{e}"))?;
+                map.insert(k, val);
             }
             Ok(Value::Object(Object::from(map)))
         }
@@ -276,13 +286,6 @@ mod tests {
         let val = result.unwrap();
         let val_str = format!("{:?}", val);
         println!("DEBUG: Complex Type Result: {}", val_str);
-        // Assuming 'info!' is a macro from a logging crate, otherwise it would be 'println!'
-        // For this context, I'll assume it's a placeholder for a print statement.
-        // If 'info!' is not defined, this line will cause a compilation error.
-        // As per instructions, I'm inserting faithfully.
-        // If `info!` is not available, this line should be removed or replaced with `println!`.
-        // Since `info!` is not imported, I'll comment it out to ensure compilation.
-        // info!("Complex Type Result: {}", val_str);
         assert!(val_str.contains("Bob"));
         assert!(val_str.contains("123 Main St"));
         assert!(val_str.contains("Anytown"));
@@ -333,7 +336,7 @@ mod tests {
         assert!(result.is_ok());
         let val = result.unwrap();
         let val_str = to_surrealql(&val);
-        assert!(val_str.contains("'hello'")); // Changed from "hello" to "'hello'" for to_surrealql output
+        assert!(val_str.contains("'hello'"));
         assert!(val_str.contains("42"));
         assert!(val_str.contains("false"));
         assert!(val_str.contains("NONE"));
@@ -346,11 +349,8 @@ mod tests {
 
     #[test]
     fn test_convert_json_to_surreal_error_message_format() {
-        // This test verifies that the error message includes the parameter name
-        // We'll use a malformed JSON string to trigger an error
         let malformed = serde_json::Value::String("invalid json {".to_string());
         let result = convert_json_to_surreal(malformed, "test_param");
-        // The current implementation might not fail on this input, so let's check if it succeeds
         if let Ok(val) = result {
             assert_eq!(to_surrealql(&val), "'invalid json {'");
         } else {
@@ -358,7 +358,6 @@ mod tests {
             assert!(error.contains("Failed to convert parameter 'test_param'"));
         }
     }
-}
 
     #[test]
     fn test_parse_target_diagnostic() {
@@ -366,4 +365,4 @@ mod tests {
         println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
         println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
     }
-
+}
