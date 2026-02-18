@@ -233,7 +233,7 @@ impl SurrealService {
     ///
     /// # Arguments
     /// * `connection_id` - Connection ID for tracking this session
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn new(connection_id: String) -> Self {
         // Output debugging information
         info!(connection_id = %connection_id, "Creating new client session");
