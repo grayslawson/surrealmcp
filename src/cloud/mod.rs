@@ -107,6 +107,12 @@ pub struct Client {
     pub refresh_token: RwLock<Option<String>>,
 }
 
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Client {
     /// Create a new SurrealDB Cloud client
     pub fn new() -> Self {
