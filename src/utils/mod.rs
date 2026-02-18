@@ -125,6 +125,35 @@ pub fn to_surrealql(value: &Value) -> String {
     value.to_sql()
 }
 
+/// Check if a SurrealQL snippet is safe from statement stacking
+///
+/// This function checks if the provided snippet contains any unquoted semicolons,
+/// which could be used to perform SurrealQL injection by stacking multiple statements.
+pub fn is_safe_surrealql_snippet(snippet: &str) -> bool {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_backtick = false;
+    let mut escaped = false;
+
+    for c in snippet.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match c {
+            '\\' => escaped = true,
+            '\'' if !in_double_quote && !in_backtick => in_single_quote = !in_single_quote,
+            '"' if !in_single_quote && !in_backtick => in_double_quote = !in_double_quote,
+            '`' if !in_single_quote && !in_double_quote => in_backtick = !in_backtick,
+            ';' if !in_single_quote && !in_double_quote && !in_backtick => return false,
+            _ => {}
+        }
+    }
+    // Snippet is safe if all quotes are closed and no unquoted semicolons were found
+    !in_single_quote && !in_double_quote && !in_backtick
+}
+
 /// Parse a single item into a SurrealQL Value
 pub fn parse_target(value: String) -> Result<String, String> {
     if value.contains(':') {
@@ -365,5 +394,18 @@ mod tests {
         println!("Table person -> {}", parse_target("person".to_string()).unwrap());
         println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
         println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
+    }
+
+    #[test]
+    fn test_is_safe_surrealql_snippet() {
+        assert!(is_safe_surrealql_snippet("age > 25"));
+        assert!(is_safe_surrealql_snippet("name = 'John; Doe'"));
+        assert!(is_safe_surrealql_snippet("name = \"John; Doe\""));
+        assert!(is_safe_surrealql_snippet("`field;name` = 10"));
+        assert!(is_safe_surrealql_snippet("comment = 'It\\'s a semicolon;'"));
+
+        assert!(!is_safe_surrealql_snippet("age > 25; DELETE person"));
+        assert!(!is_safe_surrealql_snippet("name = 'John'; DELETE person"));
+        assert!(!is_safe_surrealql_snippet("name = 'Unclosed quote"));
     }
 
