@@ -1917,7 +1917,7 @@ This is useful when you want to:
         parameters: Option<HashMap<String, Value>>,
     ) -> Result<engine::Response, McpError> {
         // Increment the query counter
-        let query_id = QUERY_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let query_id = QUERY_COUNTER.fetch_add(1, Ordering::Relaxed);
         // Lock the database connection
         let db_guard = self.db.lock().await;
         // Match the database connection
