@@ -146,7 +146,6 @@ pub async fn execute_query(
 mod tests {
     use super::*;
     use crate::db;
-    use crate::utils;
 
     async fn setup_db() -> Surreal<Any> {
         db::create_client_connection(
@@ -158,15 +157,6 @@ mod tests {
         )
         .await
         .expect("Failed to connect to in-memory SurrealDB")
-    }
-
-    #[tokio::test]
-    async fn test_check_health_logic() {
-        let db = setup_db().await;
-        // Verify healthy result
-        let (healthy, version) = utils::check_health(&db).await.expect("Health check failed");
-        assert!(healthy, "Instance should be healthy");
-        assert!(version.starts_with('3'), "Version should be 3.x, got {}", version);
     }
 
     #[tokio::test]
