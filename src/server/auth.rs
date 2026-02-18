@@ -387,8 +387,7 @@ async fn validate_jwt_token(
             }
         }
     } else {
-        // Fallback to dummy key for testing
-        DecodingKey::from_secret(b"dummy-key")
+        return Err("No valid signing key available: JWKS manager returned no key and no static public key is configured".to_string());
     };
     // Decode the authentication token
     let token_data = decode::<TokenClaims>(token, &key, &validation)
