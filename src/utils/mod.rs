@@ -1,6 +1,5 @@
 use surrealdb::types::{Array, Object, Number, Value, Table, RecordId};
 use surrealdb::types::ToSql;
-use surrealdb::{Surreal, engine::any::Any};
 
 /// Generate a unique connection ID
 pub fn generate_connection_id() -> String {
@@ -31,31 +30,6 @@ pub fn format_duration(duration: std::time::Duration) -> String {
         let minutes = (total_secs % 3600) / 60;
         let seconds = total_secs % 60;
         format!("{hours}h {minutes}m {seconds}s")
-    }
-}
-
-/// Check the health and version of the SurrealDB instance
-///
-/// This function performs an 'INFO FOR ROOT' query to verify connectivity
-/// and checks the version to ensure it's a 3.x instance.
-#[allow(dead_code)]
-pub async fn check_health(db: &Surreal<Any>) -> anyhow::Result<(bool, String)> {
-    // Perform INFO FOR ROOT; query
-    let _response = db.query("INFO FOR ROOT;").await?;
-    
-    // In SurrealDB v3, INFO FOR ROOT should succeed if we are authenticated as root.
-    // However, if we are not authenticated, it might fail.
-    // A simpler way to get the version is db.version().
-    let version = db.version().await?;
-    let version_str = version.to_string();
-    
-    // Check if it's a 3.x instance
-    let is_v3 = version_str.starts_with('3');
-    
-    if is_v3 {
-        Ok((true, version_str))
-    } else {
-        Ok((false, format!("Unsupported SurrealDB version: {version_str}. Expected 3.x")))
     }
 }
 
