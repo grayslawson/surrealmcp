@@ -1,3 +1,4 @@
+use crate::utils;
 use anyhow::Result;
 use http::request::Parts;
 use metrics::counter;
@@ -9,7 +10,7 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,7 +18,6 @@ use std::time::Instant;
 use surrealdb::{Surreal, engine::any::Any, types::Value};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
-use crate::utils;
 
 use crate::cloud::Client;
 use crate::db;
@@ -328,13 +328,13 @@ impl SurrealService {
     #[tool(description = r#"
 Execute a raw SurrealQL query against the database.
 
-This function allows you to run any valid SurrealQL query string directly. The query 
-is executed on the configured database connection as-is without any preprocessing 
-or validation. Use this for complex queries, custom logic, or operations not covered 
+This function allows you to run any valid SurrealQL query string directly. The query
+is executed on the configured database connection as-is without any preprocessing
+or validation. Use this for complex queries, custom logic, or operations not covered
 by the convenience methods.
 
-For security, you can use parameterized queries to prevent SQL injection by providing 
-parameters that will be safely bound to the query. Use $param_name syntax in your query 
+For security, you can use parameterized queries to prevent SQL injection by providing
+parameters that will be safely bound to the query. Use $param_name syntax in your query
 and provide the parameters in the parameters field.
 
 The query results are returned as text, or an error occurs if the query execution fails.
@@ -390,9 +390,9 @@ Parameterized query examples:
     #[tool(description = r#"
 Execute a SurrealDB SELECT statement to retrieve records from the database.
 
-This function executes a SurrealDB SELECT statement to query records from the specified 
-tables or record IDs. Each item in the what parameter is parsed to determine if it's a 
-table name or a record ID. You can optionally add various clauses to filter, group, sort, 
+This function executes a SurrealDB SELECT statement to query records from the specified
+tables or record IDs. Each item in the what parameter is parsed to determine if it's a
+table name or a record ID. You can optionally add various clauses to filter, group, sort,
 and paginate the results.
 
 Examples:
@@ -478,8 +478,8 @@ Examples:
     #[tool(description = r#"
 Insert new records into the specified table or with specific record ID.
 
-This function executes a SurrealDB INSERT statement to insert new records into the 
-specified table or with specific record ID. The data is provided as an array of JSON objects 
+This function executes a SurrealDB INSERT statement to insert new records into the
+specified table or with specific record ID. The data is provided as an array of JSON objects
 and will be used as the content for the new records.
 
 This is useful for batch inserting multiple records at once into a table.
@@ -545,8 +545,8 @@ Examples:
     #[tool(description = r#"
 Create a new record in the specified tables or with specific record IDs.
 
-This function executes a SurrealDB CREATE statement to insert a new record into the 
-specified table or with specific record ID. The data is provided as a JSON value 
+This function executes a SurrealDB CREATE statement to insert a new record into the
+specified table or with specific record ID. The data is provided as a JSON value
 and will be used as the content for the new record.
 
 This is useful for creating users, articles, products, or any other entity in your database.
@@ -589,8 +589,8 @@ This is useful for creating users, articles, products, or any other entity in yo
     #[tool(description = r#"
 Execute a SurrealDB UPSERT statement to create or update records in the database.
 
-This function executes a SurrealDB UPSERT statement to create new records or update 
-existing ones. The UPSERT statement combines the functionality of CREATE and UPDATE, 
+This function executes a SurrealDB UPSERT statement to create new records or update
+existing ones. The UPSERT statement combines the functionality of CREATE and UPDATE,
 inserting a new record if it doesn't exist, or updating an existing record if it does.
 
 Examples:
@@ -693,8 +693,8 @@ Examples:
     #[tool(description = r#"
 Execute a SurrealDB UPDATE statement to modify records in the database.
 
-This function executes a SurrealDB UPDATE statement to modify the content of records 
-in the database. The what parameter accepts an array where each item can be either a 
+This function executes a SurrealDB UPDATE statement to modify the content of records
+in the database. The what parameter accepts an array where each item can be either a
 table name or a specific record ID, similar to the select function.
 
 Examples:
@@ -801,8 +801,8 @@ Examples:
     #[tool(description = r#"
 Execute a SurrealDB DELETE statement to remove records from the database.
 
-This function executes a SurrealDB DELETE statement to remove records from the 
-specified tables or specific record IDs. The what parameter accepts an array where 
+This function executes a SurrealDB DELETE statement to remove records from the
+specified tables or specific record IDs. The what parameter accepts an array where
 each item can be either a table name or a specific record ID, similar to the select function.
 
 Examples:
@@ -862,12 +862,12 @@ Examples:
     #[tool(description = r#"
 Create a relationship between two records in the database.
 
-This function executes a SurrealDB RELATE statement to create a relationship between 
-two records. The relationship is defined by the from_id, relationship_type, and to_id 
+This function executes a SurrealDB RELATE statement to create a relationship between
+two records. The relationship is defined by the from_id, relationship_type, and to_id
 parameters.
 
-Optionally, you can provide content data to store on the relationship edge itself. 
-This is essential for graph operations and modeling complex relationships like social 
+Optionally, you can provide content data to store on the relationship edge itself.
+This is essential for graph operations and modeling complex relationships like social
 networks, content authorship, ownership, etc.
 
 Examples:
@@ -1168,17 +1168,17 @@ Examples:
     #[tool(description = r#"
 Connect to a different SurrealDB endpoint.
 
-This function allows you to dynamically connect to a different SurrealDB endpoint 
-during your session. The endpoint can be any supported SurrealDB engine type including 
-memory (for testing), file-based storage, distributed storage, remote connections, or 
+This function allows you to dynamically connect to a different SurrealDB endpoint
+during your session. The endpoint can be any supported SurrealDB engine type including
+memory (for testing), file-based storage, distributed storage, remote connections, or
 SurrealDB Cloud instances.
 
-Each client connection is completely isolated, so you can switch between different 
-databases as needed. The connection is persistent until you disconnect or connect to 
+Each client connection is completely isolated, so you can switch between different
+databases as needed. The connection is persistent until you disconnect or connect to
 a different endpoint. The username and password are optional.
 
-For SurrealDB Cloud instances, use the format 'cloud:instance_id' where instance_id 
-is the ID of your cloud instance. The tool will automatically fetch the authentication 
+For SurrealDB Cloud instances, use the format 'cloud:instance_id' where instance_id
+is the ID of your cloud instance. The tool will automatically fetch the authentication
 token from the SurrealDB Cloud API and establish a secure connection.
 
 Examples:
@@ -1447,7 +1447,10 @@ List available namespaces on the connected endpoint.
 
 This function lists all namespaces available on the currently connected SurrealDB endpoint.
 It returns a list of namespaces with their names."#)]
-    pub async fn list_namespaces(&self, _params: Parameters<CloudParams>) -> Result<CallToolResult, McpError> {
+    pub async fn list_namespaces(
+        &self,
+        _params: Parameters<CloudParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Start the measurement timer
         let start_time = Instant::now();
         // Increment tool usage counter
@@ -1468,10 +1471,11 @@ It returns a list of namespaces with their names."#)]
                 let value: surrealdb::types::Value = response
                     .take(0)
                     .map_err(|e: surrealdb::Error| McpError::internal_error(e.to_string(), None))?;
-                
+
                 // Convert SurrealDB Value to JSON, then to our struct
                 let json_val = utils::surreal_to_json(value);
-                let info: ListNamespaces = serde_json::from_value(json_val).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                let info: ListNamespaces = serde_json::from_value(json_val)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                 // Convert the namespaces to a JSON object
                 let namespaces: Vec<serde_json::Value> = info
                     .namespaces
@@ -1530,7 +1534,10 @@ List available databases on the connected endpoint.
 
 This function lists all databases available on the currently connected SurrealDB endpoint.
 It returns a list of databases with their names."#)]
-    pub async fn list_databases(&self, _params: Parameters<CloudParams>) -> Result<CallToolResult, McpError> {
+    pub async fn list_databases(
+        &self,
+        _params: Parameters<CloudParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Start the measurement timer
         let start_time = Instant::now();
         // Increment tool usage counter
@@ -1554,7 +1561,8 @@ It returns a list of databases with their names."#)]
 
                 // Convert SurrealDB Value to JSON, then to our struct
                 let json_val = utils::surreal_to_json(value);
-                let info: ListDatabases = serde_json::from_value(json_val).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+                let info: ListDatabases = serde_json::from_value(json_val)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                 // Convert the databases to a JSON object
                 let databases: Vec<serde_json::Value> = info
                     .databases
@@ -1612,8 +1620,8 @@ It returns a list of databases with their names."#)]
     #[tool(description = r#"
 Change the namespace on the currently connected endpoint.
 
-This function allows you to switch to a different namespace on the currently connected 
-SurrealDB endpoint. The namespace change will apply to all subsequent queries until 
+This function allows you to switch to a different namespace on the currently connected
+SurrealDB endpoint. The namespace change will apply to all subsequent queries until
 you change it again or reconnect to a different endpoint.
 
 This is useful when you want to:
@@ -1743,8 +1751,8 @@ Examples:
     #[tool(description = r#"
 Change the database on the currently connected endpoint.
 
-This function allows you to switch to a different database on the currently connected 
-SurrealDB endpoint. The database change will apply to all subsequent queries until 
+This function allows you to switch to a different database on the currently connected
+SurrealDB endpoint. The database change will apply to all subsequent queries until
 you change it again or reconnect to a different endpoint.
 
 This is useful when you want to:
@@ -1880,7 +1888,10 @@ This is useful when you want to:
 - Clean up resources
 - Ensure no active connections remain
 "#)]
-    pub async fn disconnect_endpoint(&self, _params: Parameters<CloudParams>) -> Result<CallToolResult, McpError> {
+    pub async fn disconnect_endpoint(
+        &self,
+        _params: Parameters<CloudParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Increment tool usage metrics
         counter!("surrealmcp.tools.disconnect_endpoint").increment(1);
         // Output debugging information
@@ -1899,7 +1910,9 @@ This is useful when you want to:
         );
         // Return success message
         Ok(CallToolResult {
-            content: vec![Content::text("Successfully disconnected from SurrealDB endpoint".to_string())],
+            content: vec![Content::text(
+                "Successfully disconnected from SurrealDB endpoint".to_string(),
+            )],
             is_error: None,
             meta: None,
             structured_content: None,
@@ -2148,24 +2161,30 @@ mod tests {
     async fn setup_service() -> SurrealService {
         let service = SurrealService::new(generate_connection_id());
         // Connect to memory
-        service.connect_endpoint(Parameters(ConnectParams {
-            endpoint: "memory".to_string(),
-            namespace: Some("test_ns".to_string()),
-            database: Some("test_db".to_string()),
-            username: None,
-            password: None,
-        })).await.expect("Failed to connect to memory");
+        service
+            .connect_endpoint(Parameters(ConnectParams {
+                endpoint: "memory".to_string(),
+                namespace: Some("test_ns".to_string()),
+                database: Some("test_db".to_string()),
+                username: None,
+                password: None,
+            }))
+            .await
+            .expect("Failed to connect to memory");
         service
     }
 
     #[tokio::test]
     async fn test_tool_query_simple() {
         let service = setup_service().await;
-        let res = service.query(Parameters(QueryParams {
-            query: "RETURN 42".to_string(),
-            parameters: None,
-        })).await.expect("Query failed");
-        
+        let res = service
+            .query(Parameters(QueryParams {
+                query: "RETURN 42".to_string(),
+                parameters: None,
+            }))
+            .await
+            .expect("Query failed");
+
         assert!(!res.is_error.unwrap_or(false));
         match &res.content[0].raw {
             RawContent::Text(raw_text) => assert!(raw_text.text.contains("42")),
@@ -2176,80 +2195,107 @@ mod tests {
     #[tokio::test]
     async fn test_tool_crud_flow() {
         let service = setup_service().await;
-        
+
         // 1. Create
-        let res = service.create(Parameters(CreateParams {
-            target: "person:john".to_string(),
-            data: serde_json::from_value(serde_json::json!({ "name": "John Doe", "age": 30 })).unwrap(),
-        })).await.expect("Create failed");
+        let res = service
+            .create(Parameters(CreateParams {
+                target: "person:john".to_string(),
+                data: serde_json::from_value(serde_json::json!({ "name": "John Doe", "age": 30 }))
+                    .unwrap(),
+            }))
+            .await
+            .expect("Create failed");
         assert!(!res.is_error.unwrap_or(false));
 
         // 2. Select
-        let res = service.select(Parameters(SelectParams {
-            targets: vec!["person:john".to_string()],
-            where_clause: None,
-            split_clause: None,
-            group_clause: None,
-            order_clause: None,
-            limit_clause: None,
-            start_clause: None,
-            parameters: None,
-        })).await.expect("Select failed");
+        let res = service
+            .select(Parameters(SelectParams {
+                targets: vec!["person:john".to_string()],
+                where_clause: None,
+                split_clause: None,
+                group_clause: None,
+                order_clause: None,
+                limit_clause: None,
+                start_clause: None,
+                parameters: None,
+            }))
+            .await
+            .expect("Select failed");
         assert!(!res.is_error.unwrap_or(false));
-        
+
         // 3. Update
-        let res = service.update(Parameters(UpdateParams {
-            targets: vec!["person:john".to_string()],
-            merge_data: Some(serde_json::from_value(serde_json::json!({ "age": 31 })).unwrap()),
-            patch_data: None,
-            content_data: None,
-            replace_data: None,
-            where_clause: None,
-            parameters: None,
-        })).await.expect("Update failed");
+        let res = service
+            .update(Parameters(UpdateParams {
+                targets: vec!["person:john".to_string()],
+                merge_data: Some(serde_json::from_value(serde_json::json!({ "age": 31 })).unwrap()),
+                patch_data: None,
+                content_data: None,
+                replace_data: None,
+                where_clause: None,
+                parameters: None,
+            }))
+            .await
+            .expect("Update failed");
         assert!(!res.is_error.unwrap_or(false));
 
         // 4. Delete
-        let res = service.delete(Parameters(DeleteParams {
-            targets: vec!["person:john".to_string()],
-            where_clause: None,
-            parameters: None,
-        })).await.expect("Delete failed");
+        let res = service
+            .delete(Parameters(DeleteParams {
+                targets: vec!["person:john".to_string()],
+                where_clause: None,
+                parameters: None,
+            }))
+            .await
+            .expect("Delete failed");
         assert!(!res.is_error.unwrap_or(false));
     }
 
     #[tokio::test]
     async fn test_tool_relate() {
         let service = setup_service().await;
-        
+
         // Create persons
-        service.query(Parameters(QueryParams {
-            query: "CREATE person:a, person:b".to_string(),
-            parameters: None,
-        })).await.unwrap();
+        service
+            .query(Parameters(QueryParams {
+                query: "CREATE person:a, person:b".to_string(),
+                parameters: None,
+            }))
+            .await
+            .unwrap();
 
         // Relate
-        let res = service.relate(Parameters(RelateParams {
-            from: vec!["person:a".to_string()],
-            with: vec!["person:b".to_string()],
-            table: "knows".to_string(),
-            content_data: Some(serde_json::from_value(serde_json::json!({ "since": 2024 })).unwrap()),
-            parameters: None,
-        })).await.expect("Relate failed");
-        
+        let res = service
+            .relate(Parameters(RelateParams {
+                from: vec!["person:a".to_string()],
+                with: vec!["person:b".to_string()],
+                table: "knows".to_string(),
+                content_data: Some(
+                    serde_json::from_value(serde_json::json!({ "since": 2024 })).unwrap(),
+                ),
+                parameters: None,
+            }))
+            .await
+            .expect("Relate failed");
+
         assert!(!res.is_error.unwrap_or(false));
     }
 
     #[tokio::test]
     async fn test_tool_metadata() {
         let service = setup_service().await;
-        
+
         // List Namespaces
-        let res = service.list_namespaces(Parameters(CloudParams{})).await.expect("List namespaces failed");
+        let res = service
+            .list_namespaces(Parameters(CloudParams {}))
+            .await
+            .expect("List namespaces failed");
         assert!(!res.is_error.unwrap_or(false));
-        
+
         // List Databases
-        let res = service.list_databases(Parameters(CloudParams{})).await.expect("List databases failed");
+        let res = service
+            .list_databases(Parameters(CloudParams {}))
+            .await
+            .expect("List databases failed");
         assert!(!res.is_error.unwrap_or(false));
     }
 }
