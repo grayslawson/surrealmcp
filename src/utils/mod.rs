@@ -167,6 +167,41 @@ pub fn surreal_to_json(value: Value) -> serde_json::Value {
     }
 }
 
+/// Check if a SurrealQL snippet is safe from multiple-statement injection.
+///
+/// This function ensures that the snippet does not contain unquoted semicolons,
+/// which could be used to execute multiple SurrealQL statements.
+pub fn is_safe_surrealql_snippet(s: &str) -> bool {
+    let mut in_quote: Option<char> = None;
+    let mut escaped = false;
+
+    for c in s.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '\'' | '"' | '`' => {
+                if let Some(q) = in_quote {
+                    if q == c {
+                        in_quote = None;
+                    }
+                } else {
+                    in_quote = Some(c);
+                }
+            }
+            ';' => {
+                if in_quote.is_none() {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    in_quote.is_none()
+}
+
 /// Parse a list of items into a list of SurrealQL Values
 ///
 /// This function takes a list of strings and attempts to parse them into SurrealQL Values.

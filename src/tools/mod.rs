@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use surrealdb::{Surreal, engine::any::Any, types::Value};
+use surrealdb::{Surreal, engine::any::Any, types::{Table, Value}};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
 use crate::utils;
@@ -24,7 +24,7 @@ use crate::db;
 use crate::engine;
 use crate::prompts;
 use crate::resources;
-use crate::utils::{convert_json_to_surreal, parse_target, parse_targets};
+use crate::utils::{convert_json_to_surreal, is_safe_surrealql_snippet, parse_target, parse_targets};
 
 // Global metrics
 static QUERY_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -429,26 +429,44 @@ Examples:
         query.push_str(&parse_targets(targets).map_err(|e| McpError::internal_error(e, None))?);
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid WHERE clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Add the split on clause if provided
         if let Some(v) = split_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid SPLIT ON clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" SPLIT ON {v}"));
         }
         // Add the group by clause if provided
         if let Some(v) = group_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid GROUP BY clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" GROUP BY {v}"));
         }
         // Add the order by clause if provided
         if let Some(v) = order_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid ORDER BY clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" ORDER BY {v}"));
         }
         // Add the limit clause if provided
         if let Some(v) = limit_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid LIMIT clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" LIMIT BY {v}"));
         }
         // Add the start at clause if provided
         if let Some(v) = start_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid START AT clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" START AT {v}"));
         }
         // Create parameters with native SurrealDB types
@@ -665,6 +683,9 @@ Examples:
         };
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid WHERE clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Add user-provided parameters if any
@@ -772,6 +793,9 @@ Examples:
         };
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid WHERE clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Add user-provided parameters if any
@@ -833,6 +857,9 @@ Examples:
         query.push_str(&parse_targets(targets).map_err(|e| McpError::internal_error(e, None))?);
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !is_safe_surrealql_snippet(&v) {
+                return Err(McpError::internal_error("Invalid WHERE clause: multiple statements not allowed", None));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Create parameters with native SurrealDB types
@@ -899,7 +926,7 @@ Examples:
         query.push_str(&format!(
             "[{}]->{}->[{}]",
             parse_targets(from).map_err(|e| McpError::internal_error(e, None))?,
-            table,
+            Value::Table(Table::from(table.clone())).to_sql(),
             parse_targets(with).map_err(|e| McpError::internal_error(e, None))?
         ));
         // Add the data content clause
