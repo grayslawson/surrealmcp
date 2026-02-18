@@ -1,6 +1,7 @@
 use anyhow::Result;
 use metrics::{counter, histogram};
 use rmcp::model::Content;
+use rmcp::model::RawContent;
 use std::time::Instant;
 use std::{collections::HashMap, time::Duration};
 use surrealdb::{Surreal, engine::any::Any};

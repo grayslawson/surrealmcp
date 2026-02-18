@@ -5,7 +5,7 @@ use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Content, RawContent, ServerCapabilities, ServerInfo},
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
@@ -224,34 +224,6 @@ pub struct SurrealService {
 
 #[tool_router]
 impl SurrealService {
-    /// Create a new SurrealService instance with the provided database connection.
-    ///
-    /// This function initializes a new SurrealService instance that can be used
-    /// to interact with a SurrealDB database. The database connection is provided
-    /// as a SurrealDB client instance, which is used to execute queries and
-    /// perform database operations.
-    ///
-    /// # Arguments
-    /// * `connection_id` - Connection ID for tracking this session
-    #[allow(dead_code)]
-    pub fn new(connection_id: String) -> Self {
-        // Output debugging information
-        info!(connection_id = %connection_id, "Creating new client session");
-        // Create a new service instance
-        Self {
-            db: Arc::new(Mutex::new(None)),
-            connection_id,
-            endpoint: None,
-            namespace: None,
-            database: None,
-            user: None,
-            pass: None,
-            connected_at: Instant::now(),
-            tool_router: Self::tool_router(),
-            cloud_client: Arc::new(Client::new()),
-        }
-    }
-
     /// Create a new SurrealService instance with startup configuration.
     ///
     /// This function initializes a new SurrealService instance with predefined
@@ -328,13 +300,13 @@ impl SurrealService {
     #[tool(description = r#"
 Execute a raw SurrealQL query against the database.
 
-This function allows you to run any valid SurrealQL query string directly. The query 
-is executed on the configured database connection as-is without any preprocessing 
-or validation. Use this for complex queries, custom logic, or operations not covered 
+This function allows you to run any valid SurrealQL query string directly. The query
+is executed on the configured database connection as-is without any preprocessing
+or validation. Use this for complex queries, custom logic, or operations not covered
 by the convenience methods.
 
-For security, you can use parameterized queries to prevent SQL injection by providing 
-parameters that will be safely bound to the query. Use $param_name syntax in your query 
+For security, you can use parameterized queries to prevent SQL injection by providing
+parameters that will be safely bound to the query. Use $param_name syntax in your query
 and provide the parameters in the parameters field.
 
 The query results are returned as text, or an error occurs if the query execution fails.
@@ -390,9 +362,9 @@ Parameterized query examples:
     #[tool(description = r#"
 Execute a SurrealDB SELECT statement to retrieve records from the database.
 
-This function executes a SurrealDB SELECT statement to query records from the specified 
-tables or record IDs. Each item in the what parameter is parsed to determine if it's a 
-table name or a record ID. You can optionally add various clauses to filter, group, sort, 
+This function executes a SurrealDB SELECT statement to query records from the specified
+tables or record IDs. Each item in the what parameter is parsed to determine if it's a
+table name or a record ID. You can optionally add various clauses to filter, group, sort,
 and paginate the results.
 
 Examples:
@@ -478,8 +450,8 @@ Examples:
     #[tool(description = r#"
 Insert new records into the specified table or with specific record ID.
 
-This function executes a SurrealDB INSERT statement to insert new records into the 
-specified table or with specific record ID. The data is provided as an array of JSON objects 
+This function executes a SurrealDB INSERT statement to insert new records into the
+specified table or with specific record ID. The data is provided as an array of JSON objects
 and will be used as the content for the new records.
 
 This is useful for batch inserting multiple records at once into a table.
@@ -545,8 +517,8 @@ Examples:
     #[tool(description = r#"
 Create a new record in the specified tables or with specific record IDs.
 
-This function executes a SurrealDB CREATE statement to insert a new record into the 
-specified table or with specific record ID. The data is provided as a JSON value 
+This function executes a SurrealDB CREATE statement to insert a new record into the
+specified table or with specific record ID. The data is provided as a JSON value
 and will be used as the content for the new record.
 
 This is useful for creating users, articles, products, or any other entity in your database.
@@ -589,8 +561,8 @@ This is useful for creating users, articles, products, or any other entity in yo
     #[tool(description = r#"
 Execute a SurrealDB UPSERT statement to create or update records in the database.
 
-This function executes a SurrealDB UPSERT statement to create new records or update 
-existing ones. The UPSERT statement combines the functionality of CREATE and UPDATE, 
+This function executes a SurrealDB UPSERT statement to create new records or update
+existing ones. The UPSERT statement combines the functionality of CREATE and UPDATE,
 inserting a new record if it doesn't exist, or updating an existing record if it does.
 
 Examples:
@@ -693,8 +665,8 @@ Examples:
     #[tool(description = r#"
 Execute a SurrealDB UPDATE statement to modify records in the database.
 
-This function executes a SurrealDB UPDATE statement to modify the content of records 
-in the database. The what parameter accepts an array where each item can be either a 
+This function executes a SurrealDB UPDATE statement to modify the content of records
+in the database. The what parameter accepts an array where each item can be either a
 table name or a specific record ID, similar to the select function.
 
 Examples:
@@ -801,8 +773,8 @@ Examples:
     #[tool(description = r#"
 Execute a SurrealDB DELETE statement to remove records from the database.
 
-This function executes a SurrealDB DELETE statement to remove records from the 
-specified tables or specific record IDs. The what parameter accepts an array where 
+This function executes a SurrealDB DELETE statement to remove records from the
+specified tables or specific record IDs. The what parameter accepts an array where
 each item can be either a table name or a specific record ID, similar to the select function.
 
 Examples:
@@ -862,12 +834,12 @@ Examples:
     #[tool(description = r#"
 Create a relationship between two records in the database.
 
-This function executes a SurrealDB RELATE statement to create a relationship between 
-two records. The relationship is defined by the from_id, relationship_type, and to_id 
+This function executes a SurrealDB RELATE statement to create a relationship between
+two records. The relationship is defined by the from_id, relationship_type, and to_id
 parameters.
 
-Optionally, you can provide content data to store on the relationship edge itself. 
-This is essential for graph operations and modeling complex relationships like social 
+Optionally, you can provide content data to store on the relationship edge itself.
+This is essential for graph operations and modeling complex relationships like social
 networks, content authorship, ownership, etc.
 
 Examples:
@@ -1168,17 +1140,17 @@ Examples:
     #[tool(description = r#"
 Connect to a different SurrealDB endpoint.
 
-This function allows you to dynamically connect to a different SurrealDB endpoint 
-during your session. The endpoint can be any supported SurrealDB engine type including 
-memory (for testing), file-based storage, distributed storage, remote connections, or 
+This function allows you to dynamically connect to a different SurrealDB endpoint
+during your session. The endpoint can be any supported SurrealDB engine type including
+memory (for testing), file-based storage, distributed storage, remote connections, or
 SurrealDB Cloud instances.
 
-Each client connection is completely isolated, so you can switch between different 
-databases as needed. The connection is persistent until you disconnect or connect to 
+Each client connection is completely isolated, so you can switch between different
+databases as needed. The connection is persistent until you disconnect or connect to
 a different endpoint. The username and password are optional.
 
-For SurrealDB Cloud instances, use the format 'cloud:instance_id' where instance_id 
-is the ID of your cloud instance. The tool will automatically fetch the authentication 
+For SurrealDB Cloud instances, use the format 'cloud:instance_id' where instance_id
+is the ID of your cloud instance. The tool will automatically fetch the authentication
 token from the SurrealDB Cloud API and establish a secure connection.
 
 Examples:
@@ -1468,7 +1440,7 @@ It returns a list of namespaces with their names."#)]
                 let value: surrealdb::types::Value = response
                     .take(0)
                     .map_err(|e: surrealdb::Error| McpError::internal_error(e.to_string(), None))?;
-                
+
                 // Convert SurrealDB Value to JSON, then to our struct
                 let json_val = utils::surreal_to_json(value);
                 let info: ListNamespaces = serde_json::from_value(json_val).map_err(|e| McpError::internal_error(e.to_string(), None))?;
@@ -1612,8 +1584,8 @@ It returns a list of databases with their names."#)]
     #[tool(description = r#"
 Change the namespace on the currently connected endpoint.
 
-This function allows you to switch to a different namespace on the currently connected 
-SurrealDB endpoint. The namespace change will apply to all subsequent queries until 
+This function allows you to switch to a different namespace on the currently connected
+SurrealDB endpoint. The namespace change will apply to all subsequent queries until
 you change it again or reconnect to a different endpoint.
 
 This is useful when you want to:
@@ -1743,8 +1715,8 @@ Examples:
     #[tool(description = r#"
 Change the database on the currently connected endpoint.
 
-This function allows you to switch to a different database on the currently connected 
-SurrealDB endpoint. The database change will apply to all subsequent queries until 
+This function allows you to switch to a different database on the currently connected
+SurrealDB endpoint. The database change will apply to all subsequent queries until
 you change it again or reconnect to a different endpoint.
 
 This is useful when you want to:
@@ -2146,7 +2118,16 @@ mod tests {
     use crate::utils::generate_connection_id;
 
     async fn setup_service() -> SurrealService {
-        let service = SurrealService::new(generate_connection_id());
+        let service = SurrealService::with_config(
+            generate_connection_id(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         // Connect to memory
         service.connect_endpoint(Parameters(ConnectParams {
             endpoint: "memory".to_string(),
@@ -2165,7 +2146,7 @@ mod tests {
             query: "RETURN 42".to_string(),
             parameters: None,
         })).await.expect("Query failed");
-        
+
         assert!(!res.is_error.unwrap_or(false));
         match &res.content[0].raw {
             RawContent::Text(raw_text) => assert!(raw_text.text.contains("42")),
@@ -2176,7 +2157,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_crud_flow() {
         let service = setup_service().await;
-        
+
         // 1. Create
         let res = service.create(Parameters(CreateParams {
             target: "person:john".to_string(),
@@ -2196,7 +2177,7 @@ mod tests {
             parameters: None,
         })).await.expect("Select failed");
         assert!(!res.is_error.unwrap_or(false));
-        
+
         // 3. Update
         let res = service.update(Parameters(UpdateParams {
             targets: vec!["person:john".to_string()],
@@ -2221,7 +2202,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_relate() {
         let service = setup_service().await;
-        
+
         // Create persons
         service.query(Parameters(QueryParams {
             query: "CREATE person:a, person:b".to_string(),
@@ -2236,18 +2217,18 @@ mod tests {
             content_data: Some(serde_json::from_value(serde_json::json!({ "since": 2024 })).unwrap()),
             parameters: None,
         })).await.expect("Relate failed");
-        
+
         assert!(!res.is_error.unwrap_or(false));
     }
 
     #[tokio::test]
     async fn test_tool_metadata() {
         let service = setup_service().await;
-        
+
         // List Namespaces
         let res = service.list_namespaces(Parameters(CloudParams{})).await.expect("List namespaces failed");
         assert!(!res.is_error.unwrap_or(false));
-        
+
         // List Databases
         let res = service.list_databases(Parameters(CloudParams{})).await.expect("List databases failed");
         assert!(!res.is_error.unwrap_or(false));
