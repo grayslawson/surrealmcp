@@ -1,6 +1,6 @@
 use anyhow::Result;
 use metrics::{counter, histogram};
-use rmcp::model::Content;
+use rmcp::model::{Content, RawContent};
 use std::time::Instant;
 use std::{collections::HashMap, time::Duration};
 use surrealdb::{Surreal, engine::any::Any};
@@ -191,7 +191,7 @@ mod tests {
         
         // Parse the JSON result to get namespace names
         if let RawContent::Text(text_content) = &mcp_result.content[0].raw {
-            let json: serde_json::Value = serde_json::from_str(&text_content.text)
+            let _json: serde_json::Value = serde_json::from_str(&text_content.text)
                 .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to parse JSON: {}", e), None))
                 .expect("Failed to parse JSON from MCP result"); // Added expect for test context
             
