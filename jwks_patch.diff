@@ -1,0 +1,67 @@
+<<<<<<< SEARCH
+    async fn get_jwks(&self) -> Result<CachedJwks, String> {
+        // Acquire a write lock on the cache
+        let mut cache = self.cache.write().await;
+        // Check if we have a valid cached JWKS
+        if let Some(cache) = cache.as_ref()
+            && !cache.is_expired()
+        {
+            return Ok(cache.clone());
+        }
+        // Fetch new JWKS
+        debug!("JWK cache expired or missing, fetching new JWKS");
+        // Fetch the updated JWKS
+        let jwks = self.fetch_jwks().await?;
+        // Create a new JWKS cache
+        let cached_jwks = CachedJwks::new(jwks.keys);
+        // Update the temporary cache
+        *cache = Some(cached_jwks.clone());
+        // Output debugging information
+        debug!("Successfully updated JWK cache");
+        // Return the cached JWKS
+        Ok(cached_jwks)
+    }
+=======
+    async fn get_jwks(&self) -> Result<CachedJwks, String> {
+        // First try to acquire a read lock to check the cache
+        {
+            let cache = self.cache.read().await;
+            // Check if we have a valid cached JWKS
+            if let Some(cache) = cache.as_ref()
+                && !cache.is_expired()
+            {
+                return Ok(cache.clone());
+            }
+        }
+
+        // If not found or expired, acquire a write lock
+        let mut cache = self.cache.write().await;
+
+        // Double-check the cache status after acquiring the write lock,
+        // as another task might have updated it while we were waiting.
+        if let Some(cache) = cache.as_ref()
+            && !cache.is_expired()
+        {
+            return Ok(cache.clone());
+        }
+
+        // Fetch new JWKS
+        debug!("JWK cache expired or missing, fetching new JWKS");
+        // Fetch the updated JWKS
+        let jwks = self.fetch_jwks().await?;
+
+        // Ensure the fetched JWKS is not empty
+        if jwks.keys.is_empty() {
+            return Err("Fetched JWKS contains no keys".to_string());
+        }
+
+        // Create a new JWKS cache
+        let cached_jwks = CachedJwks::new(jwks.keys);
+        // Update the temporary cache
+        *cache = Some(cached_jwks.clone());
+        // Output debugging information
+        debug!("Successfully updated JWK cache");
+        // Return the cached JWKS
+        Ok(cached_jwks)
+    }
+>>>>>>> REPLACE
