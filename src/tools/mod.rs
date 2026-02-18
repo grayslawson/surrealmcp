@@ -198,6 +198,59 @@ pub struct UseDatabaseParams {
     pub database: String,
 }
 
+/// Helper function to build the data clause for UPDATE and UPSERT queries.
+fn build_data_clause(
+    query: &mut String,
+    params: &mut HashMap<String, Value>,
+    replace_data: Option<serde_json::Map<String, serde_json::Value>>,
+    content_data: Option<serde_json::Map<String, serde_json::Value>>,
+    merge_data: Option<serde_json::Map<String, serde_json::Value>>,
+    patch_data: Option<Vec<serde_json::Map<String, serde_json::Value>>>,
+    tool_name: &str,
+) -> Result<(), McpError> {
+    match (replace_data, content_data, merge_data, patch_data) {
+        (Some(v), None, None, None) => {
+            query.push_str(" REPLACE $data");
+            params.insert(
+                "data".to_string(),
+                convert_json_to_surreal(v, "data")
+                    .map_err(|e| McpError::internal_error(e, None))?,
+            );
+        }
+        (None, Some(v), None, None) => {
+            query.push_str(" CONTENT $data");
+            params.insert(
+                "data".to_string(),
+                convert_json_to_surreal(v, "data")
+                    .map_err(|e| McpError::internal_error(e, None))?,
+            );
+        }
+        (None, None, Some(v), None) => {
+            query.push_str(" MERGE $data");
+            params.insert(
+                "data".to_string(),
+                convert_json_to_surreal(v, "data")
+                    .map_err(|e| McpError::internal_error(e, None))?,
+            );
+        }
+        (None, None, None, Some(v)) => {
+            query.push_str(" PATCH $data");
+            params.insert(
+                "data".to_string(),
+                convert_json_to_surreal(v, "data")
+                    .map_err(|e| McpError::internal_error(e, None))?,
+            );
+        }
+        _ => {
+            return Err(McpError::internal_error(
+                format!("Invalid {} mode", tool_name),
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct SurrealService {
     /// The SurrealDB client instance to use for database operations
@@ -622,47 +675,15 @@ Examples:
         // Process the tables and Record IDs
         query.push_str(&parse_targets(targets).map_err(|e| McpError::internal_error(e, None))?);
         // Add the data content clause based on the mode
-        match (replace_data, content_data, merge_data, patch_data) {
-            (Some(v), None, None, None) => {
-                query.push_str(" REPLACE $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            (None, Some(v), None, None) => {
-                query.push_str(" CONTENT $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            (None, None, Some(v), None) => {
-                query.push_str(" MERGE $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            (None, None, None, Some(v)) => {
-                query.push_str(" PATCH $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            _ => {
-                return Err(McpError::internal_error("Invalid upsert mode", None));
-            }
-        };
+        build_data_clause(
+            &mut query,
+            &mut params,
+            replace_data,
+            content_data,
+            merge_data,
+            patch_data,
+            "upsert",
+        )?;
         // Add the where clause if provided
         if let Some(v) = where_clause {
             query.push_str(&format!(" WHERE {v}"));
@@ -729,47 +750,15 @@ Examples:
         // Process the tables and Record IDs
         query.push_str(&parse_targets(targets).map_err(|e| McpError::internal_error(e, None))?);
         // Add the data content clause
-        match (replace_data, content_data, merge_data, patch_data) {
-            (Some(v), None, None, None) => {
-                query.push_str(" REPLACE $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            (None, Some(v), None, None) => {
-                query.push_str(" CONTENT $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            (None, None, Some(v), None) => {
-                query.push_str(" MERGE $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            (None, None, None, Some(v)) => {
-                query.push_str(" PATCH $data");
-                // Add the data input as a parameter
-                params.insert(
-                    "data".to_string(),
-                    convert_json_to_surreal(v, "data")
-                        .map_err(|e| McpError::internal_error(e, None))?,
-                );
-            }
-            _ => {
-                return Err(McpError::internal_error("Invalid update mode", None));
-            }
-        };
+        build_data_clause(
+            &mut query,
+            &mut params,
+            replace_data,
+            content_data,
+            merge_data,
+            patch_data,
+            "update",
+        )?;
         // Add the where clause if provided
         if let Some(v) = where_clause {
             query.push_str(&format!(" WHERE {v}"));
