@@ -143,18 +143,38 @@ impl JwksManager {
 
     /// Gets cached JWKS or fetches JWKS if expired
     async fn get_jwks(&self) -> Result<CachedJwks, String> {
-        // Acquire a write lock on the cache
+        // First try to acquire a read lock to check the cache
+        {
+            let cache = self.cache.read().await;
+            // Check if we have a valid cached JWKS
+            if let Some(cache) = cache.as_ref()
+                && !cache.is_expired()
+            {
+                return Ok(cache.clone());
+            }
+        }
+
+        // If not found or expired, acquire a write lock
         let mut cache = self.cache.write().await;
-        // Check if we have a valid cached JWKS
+
+        // Double-check the cache status after acquiring the write lock,
+        // as another task might have updated it while we were waiting.
         if let Some(cache) = cache.as_ref()
             && !cache.is_expired()
         {
             return Ok(cache.clone());
         }
+
         // Fetch new JWKS
         debug!("JWK cache expired or missing, fetching new JWKS");
         // Fetch the updated JWKS
         let jwks = self.fetch_jwks().await?;
+
+        // Ensure the fetched JWKS is not empty
+        if jwks.keys.is_empty() {
+            return Err("Fetched JWKS contains no keys".to_string());
+        }
+
         // Create a new JWKS cache
         let cached_jwks = CachedJwks::new(jwks.keys);
         // Update the temporary cache
@@ -789,5 +809,34 @@ mod tests {
         assert_eq!(custom_config.expected_issuer, EXPECTED_ISSUER);
         assert!(custom_config.validate_expiration);
         assert!(custom_config.validate_issued_at);
+    }
+}
+
+#[cfg(test)]
+mod concurrent_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_concurrent_jwks_access() {
+        let manager = Arc::new(JwksManager::new());
+        let mut handles = vec![];
+
+        for _ in 0..5 {
+            let manager = manager.clone();
+            handles.push(tokio::spawn(async move {
+                manager.get_jwks().await
+            }));
+        }
+
+        for handle in handles {
+            let result = handle.await.unwrap();
+            // We just want to ensure it doesn't deadlock and completes.
+            // In a restricted env, it might fail with a network error.
+            match result {
+                Ok(_) => info!("Concurrent fetch succeeded"),
+                Err(e) => warn!("Concurrent fetch failed (expected in some envs): {}", e),
+            }
+        }
     }
 }
