@@ -42,20 +42,37 @@ pub fn format_duration(duration: std::time::Duration) -> String {
 pub async fn check_health(db: &Surreal<Any>) -> anyhow::Result<(bool, String)> {
     // Perform INFO FOR ROOT; query
     let _response = db.query("INFO FOR ROOT;").await?;
-    
+
     // In SurrealDB v3, INFO FOR ROOT should succeed if we are authenticated as root.
     // However, if we are not authenticated, it might fail.
     // A simpler way to get the version is db.version().
     let version = db.version().await?;
     let version_str = version.to_string();
-    
+
     // Check if it's a 3.x instance
     let is_v3 = version_str.starts_with('3');
-    
+
     if is_v3 {
         Ok((true, version_str))
     } else {
         Ok((false, format!("Unsupported SurrealDB version: {version_str}. Expected 3.x")))
+    }
+}
+
+/// Helper enum to represent a JSON path lazily to avoid unnecessary allocations
+enum JsonPath<'a> {
+    Root(&'a str),
+    Index(&'a JsonPath<'a>, usize),
+    Key(&'a JsonPath<'a>, &'a str),
+}
+
+impl std::fmt::Display for JsonPath<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JsonPath::Root(name) => write!(f, "{name}"),
+            JsonPath::Index(parent, i) => write!(f, "{parent}[{i}]"),
+            JsonPath::Key(parent, k) => write!(f, "{parent}.{k}"),
+        }
     }
 }
 
@@ -88,8 +105,13 @@ pub fn convert_json_to_surreal(
     value: impl Into<serde_json::Value>,
     name: &str,
 ) -> Result<Value, String> {
-    let json_value = value.into();
-    
+    convert_json_to_surreal_recursive(value.into(), &JsonPath::Root(name))
+}
+
+fn convert_json_to_surreal_recursive(
+    json_value: serde_json::Value,
+    path: &JsonPath,
+) -> Result<Value, String> {
     match json_value {
         serde_json::Value::Null => Ok(Value::None),
         serde_json::Value::Bool(b) => Ok(Value::Bool(b)),
@@ -106,14 +128,16 @@ pub fn convert_json_to_surreal(
         serde_json::Value::Array(a) => {
             let mut vals = Vec::with_capacity(a.len());
             for (i, v) in a.into_iter().enumerate() {
-                vals.push(convert_json_to_surreal(v, &format!("{name}[{i}]"))?);
+                vals.push(convert_json_to_surreal_recursive(v, &JsonPath::Index(path, i))?);
             }
             Ok(Value::Array(Array::from(vals)))
         }
         serde_json::Value::Object(o) => {
             let mut map = std::collections::BTreeMap::new();
             for (k, v) in o {
-                map.insert(k.clone(), convert_json_to_surreal(v, &format!("{name}.{k}"))?);
+                let sub_path = JsonPath::Key(path, &k);
+                let converted_v = convert_json_to_surreal_recursive(v, &sub_path)?;
+                map.insert(k, converted_v);
             }
             Ok(Value::Object(Object::from(map)))
         }
@@ -366,4 +390,3 @@ mod tests {
         println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
         println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
     }
-
