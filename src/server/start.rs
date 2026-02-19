@@ -47,7 +47,6 @@ pub struct ServerConfig {
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
-
 /// Start the MCP server based on the provided configuration
 pub async fn start_server(config: ServerConfig) -> Result<()> {
     let token = CancellationToken::new();

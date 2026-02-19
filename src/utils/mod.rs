@@ -1,5 +1,5 @@
-use surrealdb::types::{Array, Object, Number, Value, Table, RecordId};
 use surrealdb::types::ToSql;
+use surrealdb::types::{Array, Number, Object, RecordId, Table, Value};
 use surrealdb::{Surreal, engine::any::Any};
 
 /// Generate a unique connection ID
@@ -42,20 +42,23 @@ pub fn format_duration(duration: std::time::Duration) -> String {
 pub async fn check_health(db: &Surreal<Any>) -> anyhow::Result<(bool, String)> {
     // Perform INFO FOR ROOT; query
     let _response = db.query("INFO FOR ROOT;").await?;
-    
+
     // In SurrealDB v3, INFO FOR ROOT should succeed if we are authenticated as root.
     // However, if we are not authenticated, it might fail.
     // A simpler way to get the version is db.version().
     let version = db.version().await?;
     let version_str = version.to_string();
-    
+
     // Check if it's a 3.x instance
     let is_v3 = version_str.starts_with('3');
-    
+
     if is_v3 {
         Ok((true, version_str))
     } else {
-        Ok((false, format!("Unsupported SurrealDB version: {version_str}. Expected 3.x")))
+        Ok((
+            false,
+            format!("Unsupported SurrealDB version: {version_str}. Expected 3.x"),
+        ))
     }
 }
 
@@ -89,7 +92,7 @@ pub fn convert_json_to_surreal(
     name: &str,
 ) -> Result<Value, String> {
     let json_value = value.into();
-    
+
     match json_value {
         serde_json::Value::Null => Ok(Value::None),
         serde_json::Value::Bool(b) => Ok(Value::Bool(b)),
@@ -113,7 +116,10 @@ pub fn convert_json_to_surreal(
         serde_json::Value::Object(o) => {
             let mut map = std::collections::BTreeMap::new();
             for (k, v) in o {
-                map.insert(k.clone(), convert_json_to_surreal(v, &format!("{name}.{k}"))?);
+                map.insert(
+                    k.clone(),
+                    convert_json_to_surreal(v, &format!("{name}.{k}"))?,
+                );
             }
             Ok(Value::Object(Object::from(map)))
         }
@@ -360,10 +366,74 @@ mod tests {
     }
 }
 
-    #[test]
-    fn test_parse_target_diagnostic() {
-        println!("Table person -> {}", parse_target("person".to_string()).unwrap());
-        println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
-        println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
+#[test]
+fn test_parse_target_diagnostic() {
+    println!(
+        "Table person -> {}",
+        parse_target("person".to_string()).unwrap()
+    );
+    println!(
+        "Record person:john -> {}",
+        parse_target("person:john".to_string()).unwrap()
+    );
+    println!(
+        "String target -> {}",
+        to_surrealql(&Value::String("table_name".to_string()))
+    );
+}
+
+/// Check if a SurrealQL snippet is safe for interpolation.
+///
+/// This function ensures that the snippet does not contain any unquoted semicolons,
+/// which could be used for statement stacking/SQL injection.
+pub fn is_safe_surrealql_snippet(snippet: &str) -> bool {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_backtick = false;
+    let mut escaped = false;
+
+    for c in snippet.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match c {
+            '\\' => escaped = true,
+            '\'' if !in_double_quote && !in_backtick => in_single_quote = !in_single_quote,
+            '"' if !in_single_quote && !in_backtick => in_double_quote = !in_double_quote,
+            '`' if !in_single_quote && !in_double_quote => in_backtick = !in_backtick,
+            ';' if !in_single_quote && !in_double_quote && !in_backtick => return false,
+            _ => {}
+        }
     }
 
+    // Also reject if we end with an open quote
+    !in_single_quote && !in_double_quote && !in_backtick
+}
+
+#[cfg(test)]
+mod snippet_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_safe_surrealql_snippet() {
+        // Safe cases
+        assert!(is_safe_surrealql_snippet("age > 18"));
+        assert!(is_safe_surrealql_snippet("name = 'John; Doe'"));
+        assert!(is_safe_surrealql_snippet("name = \"John; Doe\""));
+        assert!(is_safe_surrealql_snippet("`field;name` = 1"));
+        assert!(is_safe_surrealql_snippet("name = 'O\\'Reilly'"));
+        assert!(is_safe_surrealql_snippet("name = \"Double \\\" Quote\""));
+
+        // Unsafe cases
+        assert!(!is_safe_surrealql_snippet("age > 18; DELETE person"));
+        assert!(!is_safe_surrealql_snippet("1=1; DROP TABLE person"));
+        assert!(!is_safe_surrealql_snippet("name = 'John'; DELETE person"));
+
+        // Open quotes/backticks are considered unsafe (incomplete snippets)
+        assert!(!is_safe_surrealql_snippet("name = 'John"));
+        assert!(!is_safe_surrealql_snippet("name = \"John"));
+        assert!(!is_safe_surrealql_snippet("`table_name"));
+    }
+}

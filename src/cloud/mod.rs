@@ -107,7 +107,9 @@ pub struct Client {
     pub refresh_token: RwLock<Option<String>>,
 }
 
+
 impl Client {
+    #[allow(clippy::new_without_default)]
     /// Create a new SurrealDB Cloud client
     pub fn new() -> Self {
         Self {
