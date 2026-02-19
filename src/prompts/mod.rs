@@ -39,6 +39,7 @@ impl PromptGenerator for DatabaseQueryAssistant {
         vec![
             PromptArgument {
                 name: "query_type".to_string(),
+                title: Some("Query Type".to_string()),
                 description: Some(
                     "The type of query (SELECT, CREATE, UPDATE, DELETE, etc.)".to_string(),
                 ),
@@ -46,11 +47,13 @@ impl PromptGenerator for DatabaseQueryAssistant {
             },
             PromptArgument {
                 name: "table_name".to_string(),
+                title: Some("Table Name".to_string()),
                 description: Some("The table name to query".to_string()),
                 required: Some(false),
             },
             PromptArgument {
                 name: "requirements".to_string(),
+                title: Some("Requirements".to_string()),
                 description: Some("Specific requirements or constraints for the query".to_string()),
                 required: Some(false),
             },
@@ -116,16 +119,19 @@ impl PromptGenerator for DataModelingExpert {
         vec![
             PromptArgument {
                 name: "use_case".to_string(),
+                title: Some("Use Case".to_string()),
                 description: Some("The use case or application domain (e.g., social network, e-commerce, analytics)".to_string()),
                 required: Some(true),
             },
             PromptArgument {
                 name: "data_types".to_string(),
+                title: Some("Data Types".to_string()),
                 description: Some("The types of data to be stored (users, posts, transactions, etc.)".to_string()),
                 required: Some(false),
             },
             PromptArgument {
                 name: "scale_requirements".to_string(),
+                title: Some("Scale Requirements".to_string()),
                 description: Some("Scale requirements (small, medium, large, enterprise)".to_string()),
                 required: Some(false),
             },
@@ -185,6 +191,7 @@ impl PromptGenerator for SurrealQlGuide {
         vec![
             PromptArgument {
                 name: "task".to_string(),
+                title: Some("Task".to_string()),
                 description: Some(
                     "Brief description of what you need to do in SurrealQL".to_string(),
                 ),
@@ -192,6 +199,7 @@ impl PromptGenerator for SurrealQlGuide {
             },
             PromptArgument {
                 name: "schema".to_string(),
+                title: Some("Schema".to_string()),
                 description: Some(
                     "Optional schema or table context relevant to the task".to_string(),
                 ),
@@ -282,8 +290,11 @@ pub fn list_prompts() -> Vec<Prompt> {
         .into_iter()
         .map(|generator| Prompt {
             name: generator.name().to_string(),
+            title: Some(generator.summary().to_string()),
             description: Some(generator.description().to_string()),
             arguments: Some(generator.arguments()),
+            icons: None,
+            meta: None,
         })
         .collect()
 }

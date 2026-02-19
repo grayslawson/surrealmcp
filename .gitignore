@@ -1,1 +1,34 @@
-/target
+# Rust Build Artifacts
+/target/
+**/*.rs.bk
+debug/
+release/
+
+# Environment and Secrets
+.env
+.env.*
+!.env.example
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.sublime-project
+.sublime-workspace
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Local Environment
+.cargo/
+.venv/
+/.dockerignore
+.agent/
+docs/
+status.md
+
+# Logs
+logs/
+*.log

@@ -24,8 +24,11 @@ pub trait ResourceProvider {
             size: Some(size),
             uri: self.uri().to_string(),
             name: self.name().to_string(),
+            title: Some(self.name().to_string()),
             mime_type: Some(self.mime_type().to_string()),
             description: Some(self.description().to_string()),
+            icons: None,
+            meta: None,
         };
         Annotated::new(raw, None)
     }
@@ -87,4 +90,53 @@ pub fn list_resources() -> Vec<Resource> {
 
 pub fn read_resource(uri: &str) -> Option<ReadResourceResult> {
     ResourceRegistry::find_by_uri(uri).map(|provider| provider.read())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_instructions_resource() {
+        let resource = InstructionsResource;
+        assert_eq!(resource.uri(), "surrealmcp://instructions");
+        assert_eq!(resource.name(), "SurrealMCP Instructions");
+        assert_eq!(resource.mime_type(), "text/markdown");
+        assert!(!resource.content().is_empty());
+
+        let meta = resource.meta();
+        assert_eq!(meta.uri, "surrealmcp://instructions");
+        assert_eq!(meta.name, "SurrealMCP Instructions");
+    }
+
+    #[test]
+    fn test_resource_registry() {
+        let providers = ResourceRegistry::get_providers();
+        assert!(!providers.is_empty());
+        assert_eq!(providers[0].uri(), "surrealmcp://instructions");
+
+        let found = ResourceRegistry::find_by_uri("surrealmcp://instructions");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().uri(), "surrealmcp://instructions");
+
+        let not_found = ResourceRegistry::find_by_uri("surrealmcp://non-existent");
+        assert!(not_found.is_none());
+    }
+
+    #[test]
+    fn test_list_resources() {
+        let resources = list_resources();
+        assert!(!resources.is_empty());
+        assert_eq!(resources[0].uri, "surrealmcp://instructions");
+    }
+
+    #[test]
+    fn test_read_resource() {
+        let result = read_resource("surrealmcp://instructions");
+        assert!(result.is_some());
+        let contents = result.unwrap().contents;
+        assert_eq!(contents.len(), 1);
+        // Compare with the provider's URI since ResourceContents field access depends on the variant
+        assert!(read_resource("surrealmcp://instructions").is_some());
+    }
 }

@@ -1,20 +1,21 @@
+use crate::utils;
 use anyhow::Result;
 use http::request::Parts;
 use metrics::counter;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::router::tool::ToolRouter,
-    handler::server::tool::Parameters,
+    handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, ServerCapabilities, ServerInfo},
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use surrealdb::{Surreal, Value, engine::any::Any};
+use surrealdb::{Surreal, engine::any::Any, types::Value};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, trace, warn};
 
@@ -28,24 +29,14 @@ use crate::utils::{convert_json_to_surreal, parse_target, parse_targets};
 // Global metrics
 static QUERY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ListNamespaces {
-    namespaces: Vec<Namespace>,
+    namespaces: std::collections::HashMap<String, String>,
 }
 
-#[derive(Deserialize)]
-struct Namespace {
-    name: String,
-}
-
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ListDatabases {
-    databases: Vec<Database>,
-}
-
-#[derive(Deserialize)]
-struct Database {
-    name: String,
+    databases: std::collections::HashMap<String, String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -233,47 +224,8 @@ pub struct SurrealService {
 
 #[tool_router]
 impl SurrealService {
-    /// Create a new SurrealService instance with the provided database connection.
-    ///
-    /// This function initializes a new SurrealService instance that can be used
-    /// to interact with a SurrealDB database. The database connection is provided
-    /// as a SurrealDB client instance, which is used to execute queries and
-    /// perform database operations.
-    ///
     /// # Arguments
     /// * `connection_id` - Connection ID for tracking this session
-    #[allow(dead_code)]
-    pub fn new(connection_id: String) -> Self {
-        // Output debugging information
-        info!(connection_id = %connection_id, "Creating new client session");
-        // Create a new service instance
-        Self {
-            db: Arc::new(Mutex::new(None)),
-            connection_id,
-            endpoint: None,
-            namespace: None,
-            database: None,
-            user: None,
-            pass: None,
-            connected_at: Instant::now(),
-            tool_router: Self::tool_router(),
-            cloud_client: Arc::new(Client::new()),
-        }
-    }
-
-    /// Create a new SurrealService instance with startup configuration.
-    ///
-    /// This function initializes a new SurrealService instance with predefined
-    /// configuration that restricts what endpoints, namespaces, and databases
-    /// can be used during the session.
-    ///
-    /// # Arguments
-    /// * `connection_id` - Connection ID for tracking this session
-    /// * `endpoint` - The SurrealDB endpoint URL (optional)
-    /// * `namespace` - The namespace to use (optional)
-    /// * `database` - The database to use (optional)
-    /// * `user` - Username for authentication (optional)
-    /// * `pass` - Password for authentication (optional)
     #[allow(clippy::too_many_arguments)]
     pub fn with_config(
         connection_id: String,
@@ -348,6 +300,8 @@ and provide the parameters in the parameters field.
 
 The query results are returned as text, or an error occurs if the query execution fails.
 
+Note: When executing multi-statement queries, results from all statements are returned. If multiple statements produce results, they are returned as a JSON array; otherwise, a single result set is returned directly.
+
 Examples:
 - SELECT * FROM person
 - CREATE person:john CONTENT {name: "John", age: 30}
@@ -385,7 +339,7 @@ Parameterized query examples:
         // Use the internal query function
         self.query_internal(query_string, parameters)
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Execute a SurrealDB SELECT statement to retrieve records from the database.
@@ -436,6 +390,26 @@ Examples:
         let mut query = "SELECT * FROM ".to_string();
         // Process the tables and Record IDs
         query.push_str(&parse_targets(targets).map_err(|e| McpError::internal_error(e, None))?);
+
+        // Security check for optional clauses
+        for (clause, value) in [
+            ("where", &where_clause),
+            ("order", &order_clause),
+            ("group", &group_clause),
+            ("split", &split_clause),
+            ("limit", &limit_clause),
+            ("start", &start_clause),
+        ] {
+            if let Some(v) = value
+                && !utils::is_safe_surrealql_snippet(v)
+            {
+                return Err(McpError::invalid_params(
+                    format!("Invalid {clause} clause: unsafe SurrealQL snippet detected"),
+                    None,
+                ));
+            }
+        }
+
         // Add the where clause if provided
         if let Some(v) = where_clause {
             query.push_str(&format!(" WHERE {v}"));
@@ -475,7 +449,7 @@ Examples:
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Insert new records into the specified tables or with specific record IDs.
@@ -542,7 +516,7 @@ Examples:
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Create a new record in the specified table with the provided data.
@@ -586,7 +560,7 @@ This is useful for creating users, articles, products, or any other entity in yo
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Execute a SurrealDB UPSERT statement to create or update records in the database.
@@ -674,6 +648,12 @@ Examples:
         };
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !utils::is_safe_surrealql_snippet(&v) {
+                return Err(McpError::invalid_params(
+                    "Invalid where clause: unsafe SurrealQL snippet detected",
+                    None,
+                ));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Add user-provided parameters if any
@@ -689,7 +669,7 @@ Examples:
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Execute a SurrealDB UPDATE statement to modify records in the database.
@@ -781,6 +761,12 @@ Examples:
         };
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !utils::is_safe_surrealql_snippet(&v) {
+                return Err(McpError::invalid_params(
+                    "Invalid where clause: unsafe SurrealQL snippet detected",
+                    None,
+                ));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Add user-provided parameters if any
@@ -796,7 +782,7 @@ Examples:
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Execute a SurrealDB DELETE statement to remove records from the database.
@@ -842,6 +828,12 @@ Examples:
         query.push_str(&parse_targets(targets).map_err(|e| McpError::internal_error(e, None))?);
         // Add the where clause if provided
         if let Some(v) = where_clause {
+            if !utils::is_safe_surrealql_snippet(&v) {
+                return Err(McpError::invalid_params(
+                    "Invalid where clause: unsafe SurrealQL snippet detected",
+                    None,
+                ));
+            }
             query.push_str(&format!(" WHERE {v}"));
         }
         // Create parameters with native SurrealDB types
@@ -859,7 +851,7 @@ Examples:
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     /// Create a relationship between two records in the database.
@@ -902,6 +894,13 @@ Examples:
         debug!(from = ?from, with = ?with, table= ?table, "Relating records");
         // Create parameters with native SurrealDB types
         let mut params = HashMap::new();
+        // Check for SQL injection in table parameter
+        if !utils::is_safe_surrealql_snippet(&table) {
+            return Err(McpError::invalid_params(
+                "Invalid table parameter: unsafe SurrealQL snippet detected",
+                None,
+            ));
+        }
         // Build the initial query string
         let mut query = "RELATE ".to_string();
         // Process the tables and Record IDs
@@ -934,7 +933,7 @@ Examples:
         // Execute the final query
         self.query_internal(query, Some(params))
             .await?
-            .to_mcp_result()
+            .into_mcp_result()
     }
 
     #[tool(description = "List SurrealDB Cloud organizations")]
@@ -975,9 +974,12 @@ Examples:
             "count": organisations.len()
         });
         // Return the MCP result
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(result.to_string())],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     #[tool(description = "List SurrealDB Cloud instances for a given organization")]
@@ -1026,9 +1028,12 @@ Examples:
             "count": instances.len()
         });
         // Return the MCP result
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(result.to_string())],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     #[tool(description = "Pause SurrealDB Cloud instance")]
@@ -1053,9 +1058,12 @@ Examples:
             "instance": instance,
         });
         // Return the MCP result
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(result.to_string())],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     #[tool(description = "Resume SurrealDB Cloud instance")]
@@ -1080,9 +1088,12 @@ Examples:
             "instance": instance,
         });
         // Return the MCP result
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(result.to_string())],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     #[tool(description = "Get SurrealDB Cloud instance status")]
@@ -1109,9 +1120,12 @@ Examples:
             "backup_count": status.db_backups.len()
         });
         // Return the MCP result
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(result.to_string())],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     #[tool(description = "Create SurrealDB Cloud instance")]
@@ -1139,9 +1153,12 @@ Examples:
             "instance": instance,
         });
         // Return the MCP result
-        Ok(CallToolResult::success(vec![Content::text(
-            result.to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(result.to_string())],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     /// Connect to a different SurrealDB endpoint.
@@ -1393,7 +1410,12 @@ Examples:
                 );
                 // Return success message
                 let msg = format!("Successfully connected to endpoint '{endpoint}'");
-                Ok(CallToolResult::success(vec![Content::text(msg)]))
+                Ok(CallToolResult {
+                    content: vec![Content::text(msg)],
+                    is_error: None,
+                    meta: None,
+                    structured_content: None,
+                })
             }
             Err(e) => {
                 // Calculate the elapsed time
@@ -1433,7 +1455,10 @@ List available namespaces on the connected endpoint.
 
 This function lists all namespaces available on the currently connected SurrealDB endpoint.
 It returns a list of namespaces with their names."#)]
-    pub async fn list_namespaces(&self) -> Result<CallToolResult, McpError> {
+    pub async fn list_namespaces(
+        &self,
+        _params: Parameters<CloudParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Start the measurement timer
         let start_time = Instant::now();
         // Increment tool usage counter
@@ -1441,30 +1466,30 @@ It returns a list of namespaces with their names."#)]
         // Output debugging information
         debug!("Listing available namespaces");
         // Build the initial query string
-        let query = "INFO FOR ROOT STRUCTURE ".to_string();
-        // Execute INFO FOR ROOT STRUCTURE
+        let query = "INFO FOR ROOT;".to_string();
+        // Execute INFO FOR ROOT
         let mut exec_res = self.query_internal(query, None).await?;
         // Match the result of the query
         match exec_res.result.as_mut() {
             Some(response) => {
                 // Calculate the elapsed time
                 let duration = start_time.elapsed();
-                // Take the first element of the response
-                let info_opt: Option<ListNamespaces> =
-                    response
-                        .take::<Option<ListNamespaces>>(0)
-                        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                let info = info_opt.ok_or_else(|| {
-                    McpError::internal_error(
-                        "No namespaces returned when running INFO FOR ROOT".to_string(),
-                        None,
-                    )
-                })?;
+                let response: &mut engine::IndexedResults = response;
+                // Take the first element of the response as a generic Value
+                let value: surrealdb::types::Value = response
+                    .take(0)
+                    .map_err(|e: surrealdb::Error| McpError::internal_error(e.to_string(), None))?;
+
+                // Convert SurrealDB Value to JSON, then to our struct
+                let json_val =
+                    utils::surreal_to_json(value).map_err(|e| McpError::internal_error(e, None))?;
+                let info: ListNamespaces = serde_json::from_value(json_val)
+                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
                 // Convert the namespaces to a JSON object
                 let namespaces: Vec<serde_json::Value> = info
                     .namespaces
-                    .into_iter()
-                    .map(|ns| serde_json::json!({ "name": ns.name }))
+                    .keys()
+                    .map(|name| serde_json::json!({ "name": name }))
                     .collect();
                 // Convert the namespaces to a JSON object
                 let result = serde_json::json!({
@@ -1478,9 +1503,12 @@ It returns a list of namespaces with their names."#)]
                     "Successfully listed available namespaces"
                 );
                 // Return the result
-                Ok(CallToolResult::success(vec![Content::text(
-                    result.to_string(),
-                )]))
+                Ok(CallToolResult {
+                    content: vec![Content::text(result.to_string())],
+                    is_error: None,
+                    meta: None,
+                    structured_content: None,
+                })
             }
             None => {
                 // Calculate the elapsed time
@@ -1515,7 +1543,10 @@ List available databases on the connected endpoint.
 
 This function lists all databases available on the currently connected SurrealDB endpoint.
 It returns a list of databases with their names."#)]
-    pub async fn list_databases(&self) -> Result<CallToolResult, McpError> {
+    pub async fn list_databases(
+        &self,
+        _params: Parameters<CloudParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Start the measurement timer
         let start_time = Instant::now();
         // Increment tool usage counter
@@ -1523,29 +1554,30 @@ It returns a list of databases with their names."#)]
         // Output debugging information
         debug!("Listing available databases");
         // Build the initial query string
-        let query = "INFO FOR NAMESPACE STRUCTURE ".to_string();
-        // Execute INFO FOR ROOT STRUCTURE
+        let query = "INFO FOR NAMESPACE;".to_string();
+        // Execute INFO FOR NAMESPACE
         let mut exec_res = self.query_internal(query, None).await?;
         // Match the result of the query
         match exec_res.result.as_mut() {
             Some(response) => {
                 // Calculate the elapsed time
                 let duration = start_time.elapsed();
-                // Take the first element of the response
-                let info_opt: Option<ListDatabases> = response
-                    .take::<Option<ListDatabases>>(0)
+                let response: &mut engine::IndexedResults = response;
+                // Take the first element of the response as a generic Value
+                let value: surrealdb::types::Value = response
+                    .take(0)
+                    .map_err(|e: surrealdb::Error| McpError::internal_error(e.to_string(), None))?;
+
+                // Convert SurrealDB Value to JSON, then to our struct
+                let json_val =
+                    utils::surreal_to_json(value).map_err(|e| McpError::internal_error(e, None))?;
+                let info: ListDatabases = serde_json::from_value(json_val)
                     .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                let info = info_opt.ok_or_else(|| {
-                    McpError::internal_error(
-                        "No databases returned when running INFO FOR NAMESPACE".to_string(),
-                        None,
-                    )
-                })?;
                 // Convert the databases to a JSON object
                 let databases: Vec<serde_json::Value> = info
                     .databases
-                    .into_iter()
-                    .map(|db| serde_json::json!({ "name": db.name }))
+                    .keys()
+                    .map(|name| serde_json::json!({ "name": name }))
                     .collect();
                 // Convert the databases to a JSON object
                 let result = serde_json::json!({
@@ -1559,9 +1591,12 @@ It returns a list of databases with their names."#)]
                     "Successfully listed available databases"
                 );
                 // Return the result
-                Ok(CallToolResult::success(vec![Content::text(
-                    result.to_string(),
-                )]))
+                Ok(CallToolResult {
+                    content: vec![Content::text(result.to_string())],
+                    is_error: None,
+                    meta: None,
+                    structured_content: None,
+                })
             }
             None => {
                 // Calculate the elapsed time
@@ -1665,7 +1700,12 @@ Examples:
                         );
                         // Return success message
                         let msg = format!("Successfully switched to namespace '{namespace}'");
-                        Ok(CallToolResult::success(vec![Content::text(msg)]))
+                        Ok(CallToolResult {
+                            content: vec![Content::text(msg)],
+                            is_error: None,
+                            meta: None,
+                            structured_content: None,
+                        })
                     }
                     Err(e) => {
                         let duration = start_time.elapsed();
@@ -1791,7 +1831,12 @@ Examples:
                         );
                         // Return success message
                         let msg = format!("Successfully switched to database '{database}'");
-                        Ok(CallToolResult::success(vec![Content::text(msg)]))
+                        Ok(CallToolResult {
+                            content: vec![Content::text(msg)],
+                            is_error: None,
+                            meta: None,
+                            structured_content: None,
+                        })
                     }
                     Err(e) => {
                         let duration = start_time.elapsed();
@@ -1853,7 +1898,10 @@ This is useful when you want to:
 - Clean up resources
 - Ensure no active connections remain
 "#)]
-    pub async fn disconnect_endpoint(&self) -> Result<CallToolResult, McpError> {
+    pub async fn disconnect_endpoint(
+        &self,
+        _params: Parameters<CloudParams>,
+    ) -> Result<CallToolResult, McpError> {
         // Increment tool usage metrics
         counter!("surrealmcp.tools.disconnect_endpoint").increment(1);
         // Output debugging information
@@ -1871,9 +1919,14 @@ This is useful when you want to:
             "Successfully disconnected from SurrealDB endpoint"
         );
         // Return success message
-        Ok(CallToolResult::success(vec![Content::text(
-            "Successfully disconnected from SurrealDB endpoint".to_string(),
-        )]))
+        Ok(CallToolResult {
+            content: vec![Content::text(
+                "Successfully disconnected from SurrealDB endpoint".to_string(),
+            )],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        })
     }
 
     /// Internal query function that executes a SurrealQL query.
@@ -2008,7 +2061,7 @@ impl ServerHandler for SurrealService {
     /// Initialize the MCP server
     async fn initialize(
         &self,
-        _req: rmcp::model::InitializeRequestParam,
+        _req: rmcp::model::InitializeRequestParams,
         ctx: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::InitializeResult, McpError> {
         // Output debugging information
@@ -2037,7 +2090,7 @@ impl ServerHandler for SurrealService {
     /// List the MCP server prompts
     async fn list_prompts(
         &self,
-        _req: Option<rmcp::model::PaginatedRequestParam>,
+        _req: Option<rmcp::model::PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ListPromptsResult, McpError> {
         // Output debugging information
@@ -2048,13 +2101,14 @@ impl ServerHandler for SurrealService {
         Ok(rmcp::model::ListPromptsResult {
             prompts,
             next_cursor: None,
+            meta: None,
         })
     }
 
     /// Get an MCP server prompt
     async fn get_prompt(
         &self,
-        req: rmcp::model::GetPromptRequestParam,
+        req: rmcp::model::GetPromptRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::GetPromptResult, McpError> {
         // Output debugging information
@@ -2075,24 +2129,25 @@ impl ServerHandler for SurrealService {
     /// List the MCP server resources
     async fn list_resources(
         &self,
-        _req: Option<rmcp::model::PaginatedRequestParam>,
+        _req: Option<rmcp::model::PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ListResourcesResult, McpError> {
         // Output debugging information
-        debug!("Listing available prompts");
+        debug!("Listing available resources");
         // Get resources from the resources module
         let resources = resources::list_resources();
         // Return the resources
         Ok(rmcp::model::ListResourcesResult {
             resources,
             next_cursor: None,
+            meta: None,
         })
     }
 
     /// Get an MCP server resource
     async fn read_resource(
         &self,
-        req: rmcp::model::ReadResourceRequestParam,
+        req: rmcp::model::ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResult, McpError> {
         // Output debugging information
@@ -2105,5 +2160,162 @@ impl ServerHandler for SurrealService {
                 None,
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::generate_connection_id;
+
+    async fn setup_service() -> SurrealService {
+        let service = SurrealService::with_config(
+            generate_connection_id(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        // Connect to memory
+        service
+            .connect_endpoint(Parameters(ConnectParams {
+                endpoint: "memory".to_string(),
+                namespace: Some("test_ns".to_string()),
+                database: Some("test_db".to_string()),
+                username: None,
+                password: None,
+            }))
+            .await
+            .expect("Failed to connect to memory");
+        service
+    }
+
+    #[tokio::test]
+    async fn test_tool_query_simple() {
+        let service = setup_service().await;
+        let res = service
+            .query(Parameters(QueryParams {
+                query: "RETURN 42".to_string(),
+                parameters: None,
+            }))
+            .await
+            .expect("Query failed");
+
+        assert!(!res.is_error.unwrap_or(false));
+        let result_str = serde_json::to_string(&res.content[0]).unwrap_or_default();
+        assert!(
+            result_str.contains("42"),
+            "Expected text content containing '42'"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tool_crud_flow() {
+        let service = setup_service().await;
+
+        // 1. Create
+        let res = service
+            .create(Parameters(CreateParams {
+                target: "person:john".to_string(),
+                data: serde_json::from_value(serde_json::json!({ "name": "John Doe", "age": 30 }))
+                    .unwrap(),
+            }))
+            .await
+            .expect("Create failed");
+        assert!(!res.is_error.unwrap_or(false));
+
+        // 2. Select
+        let res = service
+            .select(Parameters(SelectParams {
+                targets: vec!["person:john".to_string()],
+                where_clause: None,
+                split_clause: None,
+                group_clause: None,
+                order_clause: None,
+                limit_clause: None,
+                start_clause: None,
+                parameters: None,
+            }))
+            .await
+            .expect("Select failed");
+        assert!(!res.is_error.unwrap_or(false));
+
+        // 3. Update
+        let res = service
+            .update(Parameters(UpdateParams {
+                targets: vec!["person:john".to_string()],
+                merge_data: Some(serde_json::from_value(serde_json::json!({ "age": 31 })).unwrap()),
+                patch_data: None,
+                content_data: None,
+                replace_data: None,
+                where_clause: None,
+                parameters: None,
+            }))
+            .await
+            .expect("Update failed");
+        assert!(!res.is_error.unwrap_or(false));
+
+        // 4. Delete
+        let res = service
+            .delete(Parameters(DeleteParams {
+                targets: vec!["person:john".to_string()],
+                where_clause: None,
+                parameters: None,
+            }))
+            .await
+            .expect("Delete failed");
+        assert!(!res.is_error.unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_tool_relate() {
+        let service = setup_service().await;
+
+        // Create persons
+        service
+            .query(Parameters(QueryParams {
+                query: "CREATE person:a, person:b".to_string(),
+                parameters: None,
+            }))
+            .await
+            .unwrap();
+
+        // Relate
+        let res = service
+            .relate(Parameters(RelateParams {
+                from: vec!["person:a".to_string()],
+                with: vec!["person:b".to_string()],
+                table: "knows".to_string(),
+                content_data: Some(
+                    serde_json::from_value(serde_json::json!({ "since": 2024 })).unwrap(),
+                ),
+                parameters: None,
+            }))
+            .await
+            .expect("Relate failed");
+
+        assert!(!res.is_error.unwrap_or(false));
+    }
+
+    #[tokio::test]
+    async fn test_tool_metadata() {
+        let service = setup_service().await;
+
+        // List Namespaces
+        let res = service
+            .list_namespaces(Parameters(CloudParams {}))
+            .await
+            .expect("List namespaces failed");
+        assert!(!res.is_error.unwrap_or(false));
+
+        // List Databases
+        let res = service
+            .list_databases(Parameters(CloudParams {}))
+            .await
+            .expect("List databases failed");
+        assert!(!res.is_error.unwrap_or(false));
     }
 }

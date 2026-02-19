@@ -1,17 +1,17 @@
+pub mod cli;
+pub mod cloud;
+pub mod db;
+pub mod engine;
+pub mod logs;
+pub mod prompts;
+pub mod resources;
+pub mod server;
+pub mod tools;
+pub mod utils;
+
 use crate::server::ServerConfig;
 use anyhow::Result;
 use clap::Parser;
-
-mod cli;
-mod cloud;
-mod db;
-mod engine;
-mod logs;
-mod prompts;
-mod resources;
-mod server;
-mod tools;
-mod utils;
 
 #[tokio::main]
 async fn main() -> Result<()> {

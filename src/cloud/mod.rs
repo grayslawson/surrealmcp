@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, trace};
 
 const CLOUD_API_BASE_URL: &str = "https://api.cloud.surrealdb.com/api/v1";
@@ -14,6 +14,7 @@ pub struct CloudSignInResponse {
 
 /// A user in SurrealDB Cloud
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CloudUser {
     pub id: String,
     pub email: String,
@@ -104,6 +105,16 @@ pub struct Client {
     pub auth_token: RwLock<Option<String>>,
     /// The SurrealDB Cloud refresh token
     pub refresh_token: RwLock<Option<String>>,
+    /// The SurrealDB Cloud authentication lock
+    pub auth_lock: Mutex<()>,
+    /// The base URL for the SurrealDB Cloud API
+    base_url: String,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Client {
@@ -114,6 +125,8 @@ impl Client {
             client_token: RwLock::new(None),
             auth_token: RwLock::new(None),
             refresh_token: RwLock::new(None),
+            auth_lock: Mutex::new(()),
+            base_url: CLOUD_API_BASE_URL.to_string(),
         }
     }
 
@@ -124,7 +137,16 @@ impl Client {
             client_token: RwLock::new(None),
             auth_token: RwLock::new(Some(access_token)),
             refresh_token: RwLock::new(Some(refresh_token)),
+            auth_lock: Mutex::new(()),
+            base_url: CLOUD_API_BASE_URL.to_string(),
         }
+    }
+
+    /// Create a new SurrealDB Cloud client with a custom base URL
+    #[cfg(test)]
+    pub fn with_base_url(mut self, base_url: String) -> Self {
+        self.base_url = base_url;
+        self
     }
 
     /// Send a GET request to the given URL
@@ -132,7 +154,7 @@ impl Client {
         // Ensure we are authenticated
         self.authenticate().await?;
         // Create the full URL path
-        let url = format!("{CLOUD_API_BASE_URL}{url}");
+        let url = format!("{}{url}", self.base_url);
         // Await the stored auth token
         let auth_token = self.auth_token.read().await;
         // Get the authentication token
@@ -163,7 +185,7 @@ impl Client {
         // Ensure we are authenticated
         self.authenticate().await?;
         // Create the full URL path
-        let url = format!("{CLOUD_API_BASE_URL}{url}");
+        let url = format!("{}{url}", self.base_url);
         // Await the stored auth token
         let auth_token = self.auth_token.read().await;
         // Get the authentication token
@@ -193,6 +215,12 @@ impl Client {
         if self.auth_token.read().await.is_some() {
             return Ok(());
         }
+        // Acquire the authentication lock
+        let _lock = self.auth_lock.lock().await;
+        // If the auth token was set while we were waiting, return
+        if self.auth_token.read().await.is_some() {
+            return Ok(());
+        }
         // Await the stored client token
         let client_token = self.client_token.read().await;
         // Get the client token
@@ -202,7 +230,7 @@ impl Client {
         // Output debugging information
         debug!("Authenticating with SurrealDB Cloud using bearer token");
         // Create the full URL path
-        let url = format!("{CLOUD_API_BASE_URL}/signin");
+        let url = format!("{}/signin", self.base_url);
         // Send the request
         let response = self.client.post(url).json(&client_token).send().await?;
         // Check the response status
@@ -753,5 +781,69 @@ mod tests {
                 panic!("❌ Failed to deserialize: {e}");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_concurrency() {
+        use tokio::time::{Duration, timeout};
+        timeout(Duration::from_secs(5), async {
+            use axum::{Json, Router, routing::post};
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use tokio::net::TcpListener;
+
+            let call_count = Arc::new(AtomicUsize::new(0));
+            let call_count_clone = call_count.clone();
+
+            let app = Router::new().route(
+                "/signin",
+                post(move || {
+                    let count = call_count_clone.clone();
+                    async move {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        // Simulate some delay to ensure concurrent requests overlap
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        Json(CloudSignInResponse {
+                            id: "test_id".to_string(),
+                            token: "test_token".to_string(),
+                        })
+                    }
+                }),
+            );
+
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let base_url = format!("http://{}", addr);
+
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+
+            let client = Arc::new(Client::new().with_base_url(base_url));
+            *client.client_token.write().await = Some("test_client_token".to_string());
+
+            let mut handles = vec![];
+            for _ in 0..10 {
+                let client = client.clone();
+                handles.push(tokio::spawn(async move {
+                    client.authenticate().await.unwrap();
+                }));
+            }
+
+            for handle in handles {
+                handle.await.unwrap();
+            }
+
+            // Only one signin call should have been made
+            assert_eq!(call_count.load(Ordering::SeqCst), 1);
+
+            // Auth token should be set
+            assert_eq!(
+                client.auth_token.read().await.as_deref(),
+                Some("test_token")
+            );
+        })
+        .await
+        .expect("Test timed out after 5 seconds");
     }
 }

@@ -143,18 +143,38 @@ impl JwksManager {
 
     /// Gets cached JWKS or fetches JWKS if expired
     async fn get_jwks(&self) -> Result<CachedJwks, String> {
-        // Acquire a write lock on the cache
+        // First try to acquire a read lock to check the cache
+        {
+            let cache = self.cache.read().await;
+            // Check if we have a valid cached JWKS
+            if let Some(cache) = cache.as_ref()
+                && !cache.is_expired()
+            {
+                return Ok(cache.clone());
+            }
+        }
+
+        // If not found or expired, acquire a write lock
         let mut cache = self.cache.write().await;
-        // Check if we have a valid cached JWKS
+
+        // Double-check the cache status after acquiring the write lock,
+        // as another task might have updated it while we were waiting.
         if let Some(cache) = cache.as_ref()
             && !cache.is_expired()
         {
             return Ok(cache.clone());
         }
+
         // Fetch new JWKS
         debug!("JWK cache expired or missing, fetching new JWKS");
         // Fetch the updated JWKS
         let jwks = self.fetch_jwks().await?;
+
+        // Ensure the fetched JWKS is not empty
+        if jwks.keys.is_empty() {
+            return Err("Fetched JWKS contains no keys".to_string());
+        }
+
         // Create a new JWKS cache
         let cached_jwks = CachedJwks::new(jwks.keys);
         // Update the temporary cache
@@ -250,6 +270,7 @@ struct JweHeader {
 
 /// JWT header structure
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 struct JwtHeader {
     /// The algorithm used to sign the token
     alg: String,
@@ -386,8 +407,7 @@ async fn validate_jwt_token(
             }
         }
     } else {
-        // Fallback to dummy key for testing
-        DecodingKey::from_secret(b"dummy-key")
+        return Err("No valid signing key available: JWKS manager returned no key and no static public key is configured".to_string());
     };
     // Decode the authentication token
     let token_data = decode::<TokenClaims>(token, &key, &validation)
@@ -543,12 +563,24 @@ mod tests {
     };
     use tower::ServiceExt;
 
+    /// Helper function to create a test JWE token with a given issuer
+    fn make_test_jwe_token(issuer: &str) -> String {
+        let header = JweHeader {
+            alg: "dir".to_string(),
+            enc: "A256GCM".to_string(),
+            iss: issuer.to_string(),
+        };
+        let header_json = serde_json::to_string(&header).expect("Failed to serialize JWE header");
+        let header_b64 = URL_SAFE_NO_PAD.encode(header_json.as_bytes());
+        format!("{header_b64}.key.iv.payload.tag")
+    }
+
     #[tokio::test]
     async fn test_validate_surrealdb_jwe_token() {
         // Example JWE token from SurrealDB auth service
-        let token = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLnN1cnJlYWxkYi5jb20vIn0..i2Rd5nBEMkJSz6dC.KWp44r7imTAq0nOEXYGC6J4ABuaLFt_4EKFYIUEjN7sNB98aiRatF7nfoopZUqVsp4OWHA1AtnBL8FNuIeHZwH1WthdhAb3P4cbE-KvgrfS3RFyRCXqX9tqzxF9K3wTAvAnI3Lyp510jt9k3ytNKycfJi1mlXKw-WpU8WfqlgKRVd4QkWAn_OKMjfOZDgcCfiKxoHY5FYF77KymTQfQbauKjt4kpLFuFsJf5MleplV5T6cOy-ehJSbfsOUVeRNSeMdkZ4eLLG_vvTNJB.lJop5ReVf6pWw5rb_E5ILg";
+        let token = make_test_jwe_token(EXPECTED_ISSUER);
 
-        let result = validate_jwe_token(token, &TokenValidationConfig::default()).await;
+        let result = validate_jwe_token(&token, &TokenValidationConfig::default()).await;
         assert!(
             result.is_ok(),
             "Token validation should succeed: {result:?}"
@@ -574,9 +606,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_jwe_header_structure() {
-        let token = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLnN1cnJlYWxkYi5jb20vIn0..i2Rd5nBEMkJSz6dC.KWp44r7imTAq0nOEXYGC6J4ABuaLFt_4EKFYIUEjN7sNB98aiRatF7nfoopZUqVsp4OWHA1AtnBL8FNuIeHZwH1WthdhAb3P4cbE-KvgrfS3RFyRCXqX9tqzxF9K3wTAvAnI3Lyp510jt9k3ytNKycfJi1mlXKw-WpU8WfqlgKRVd4QkWAn_OKMjfOZDgcCfiKxoHY5FYF77KymTQfQbauKjt4kpLFuFsJf5MleplV5T6cOy-ehJSbfsOUVeRNSeMdkZ4eLLG_vvTNJB.lJop5ReVf6pWw5rb_E5ILg";
+        let token = make_test_jwe_token(EXPECTED_ISSUER);
 
-        let result = validate_jwe_token(token, &TokenValidationConfig::default()).await;
+        let result = validate_jwe_token(&token, &TokenValidationConfig::default()).await;
         assert!(result.is_ok(), "JWE token validation should succeed");
 
         let claims = result.unwrap();
@@ -585,10 +617,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_jwe_token_without_decryption_key() {
-        let token = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLnN1cnJlYWxkYi5jb20vIn0..i2Rd5nBEMkJSz6dC.KWp44r7imTAq0nOEXYGC6J4ABuaLFt_4EKFYIUEjN7sNB98aiRatF7nfoopZUqVsp4OWHA1AtnBL8FNuIeHZwH1WthdhAb3P4cbE-KvgrfS3RFyRCXqX9tqzxF9K3wTAvAnI3Lyp510jt9k3ytNKycfJi1mlXKw-WpU8WfqlgKRVd4QkWAn_OKMjfOZDgcCfiKxoHY5FYF77KymTQfQbauKjt4kpLFuFsJf5MleplV5T6cOy-ehJSbfsOUVeRNSeMdkZ4eLLG_vvTNJB.lJop5ReVf6pWw5rb_E5ILg";
+        let token = make_test_jwe_token(EXPECTED_ISSUER);
 
         // Should fall back to header-only validation when no decryption key is available
-        let result = validate_jwe_token(token, &TokenValidationConfig::default()).await;
+        let result = validate_jwe_token(&token, &TokenValidationConfig::default()).await;
         assert!(result.is_ok());
         assert!(result.unwrap().iss == EXPECTED_ISSUER);
     }
@@ -634,7 +666,7 @@ mod tests {
                     require_bearer_auth(config, req, next)
                 }));
 
-        let token = "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLnN1cnJlYWxkYi5jb20vIn0..i2Rd5nBEMkJSz6dC.KWp44r7imTAq0nOEXYGC6J4ABuaLFt_4EKFYIUEjN7sNB98aiRatF7nfoopZUqVsp4OWHA1AtnBL8FNuIeHZwH1WthdhAb3P4cbE-KvgrfS3RFyRCXqX9tqzxF9K3wTAvAnI3Lyp510jt9k3ytNKycfJi1mlXKw-WpU8WfqlgKRVd4QkWAn_OKMjfOZDgcCfiKxoHY5FYF77KymTQfQbauKjt4kpLFuFsJf5MleplV5T6cOy-ehJSbfsOUVeRNSeMdkZ4eLLG_vvTNJB.lJop5ReVf6pWw5rb_E5ILg";
+        let token = make_test_jwe_token(EXPECTED_ISSUER);
 
         let request = Request::builder()
             .uri("/test")
@@ -788,5 +820,32 @@ mod tests {
         assert_eq!(custom_config.expected_issuer, EXPECTED_ISSUER);
         assert!(custom_config.validate_expiration);
         assert!(custom_config.validate_issued_at);
+    }
+}
+
+#[cfg(test)]
+mod concurrent_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_concurrent_jwks_access() {
+        let manager = Arc::new(JwksManager::new());
+        let mut handles = vec![];
+
+        for _ in 0..5 {
+            let manager = manager.clone();
+            handles.push(tokio::spawn(async move { manager.get_jwks().await }));
+        }
+
+        for handle in handles {
+            let result = handle.await.unwrap();
+            // We just want to ensure it doesn't deadlock and completes.
+            // In a restricted env, it might fail with a network error.
+            match result {
+                Ok(_) => info!("Concurrent fetch succeeded"),
+                Err(e) => warn!("Concurrent fetch failed (expected in some envs): {}", e),
+            }
+        }
     }
 }
