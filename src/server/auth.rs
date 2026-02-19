@@ -100,7 +100,7 @@ pub struct JwksManager {
     /// HTTP client for fetching JWKS
     client: reqwest::Client,
     /// Temporary cache for JWKS
-    cache: Arc<RwLock<Option<CachedJwks>>>,
+    cache: Arc<RwLock<Option<Arc<CachedJwks>>>>,
 }
 
 impl JwksManager {
@@ -142,23 +142,35 @@ impl JwksManager {
     }
 
     /// Gets cached JWKS or fetches JWKS if expired
-    async fn get_jwks(&self) -> Result<CachedJwks, String> {
-        // Acquire a write lock on the cache
+    async fn get_jwks(&self) -> Result<Arc<CachedJwks>, String> {
+        // Use a read lock first to allow shared access
+        {
+            let cache = self.cache.read().await;
+            if let Some(cache) = cache.as_ref()
+                && !cache.is_expired()
+            {
+                return Ok(Arc::clone(cache));
+            }
+        }
+
+        // Acquire a write lock on the cache to update it
         let mut cache = self.cache.write().await;
-        // Check if we have a valid cached JWKS
+
+        // Double-check if another thread updated the cache while we were waiting for the write lock
         if let Some(cache) = cache.as_ref()
             && !cache.is_expired()
         {
-            return Ok(cache.clone());
+            return Ok(Arc::clone(cache));
         }
+
         // Fetch new JWKS
         debug!("JWK cache expired or missing, fetching new JWKS");
         // Fetch the updated JWKS
         let jwks = self.fetch_jwks().await?;
-        // Create a new JWKS cache
-        let cached_jwks = CachedJwks::new(jwks.keys);
+        // Create a new JWKS cache wrapped in an Arc
+        let cached_jwks = Arc::new(CachedJwks::new(jwks.keys));
         // Update the temporary cache
-        *cache = Some(cached_jwks.clone());
+        *cache = Some(Arc::clone(&cached_jwks));
         // Output debugging information
         debug!("Successfully updated JWK cache");
         // Return the cached JWKS
