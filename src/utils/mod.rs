@@ -1,5 +1,5 @@
-use surrealdb::types::{Array, Object, Number, Value, Table, RecordId};
 use surrealdb::types::ToSql;
+use surrealdb::types::{Array, Number, Object, RecordId, Table, Value};
 use surrealdb::{Surreal, engine::any::Any};
 
 /// Generate a unique connection ID
@@ -42,20 +42,23 @@ pub fn format_duration(duration: std::time::Duration) -> String {
 pub async fn check_health(db: &Surreal<Any>) -> anyhow::Result<(bool, String)> {
     // Perform INFO FOR ROOT; query
     let _response = db.query("INFO FOR ROOT;").await?;
-    
+
     // In SurrealDB v3, INFO FOR ROOT should succeed if we are authenticated as root.
     // However, if we are not authenticated, it might fail.
     // A simpler way to get the version is db.version().
     let version = db.version().await?;
     let version_str = version.to_string();
-    
+
     // Check if it's a 3.x instance
     let is_v3 = version_str.starts_with('3');
-    
+
     if is_v3 {
         Ok((true, version_str))
     } else {
-        Ok((false, format!("Unsupported SurrealDB version: {version_str}. Expected 3.x")))
+        Ok((
+            false,
+            format!("Unsupported SurrealDB version: {version_str}. Expected 3.x"),
+        ))
     }
 }
 
@@ -89,7 +92,7 @@ pub fn convert_json_to_surreal(
     name: &str,
 ) -> Result<Value, String> {
     let json_value = value.into();
-    
+
     match json_value {
         serde_json::Value::Null => Ok(Value::None),
         serde_json::Value::Bool(b) => Ok(Value::Bool(b)),
@@ -113,7 +116,10 @@ pub fn convert_json_to_surreal(
         serde_json::Value::Object(o) => {
             let mut map = std::collections::BTreeMap::new();
             for (k, v) in o {
-                map.insert(k.clone(), convert_json_to_surreal(v, &format!("{name}.{k}"))?);
+                map.insert(
+                    k.clone(),
+                    convert_json_to_surreal(v, &format!("{name}.{k}"))?,
+                );
             }
             Ok(Value::Object(Object::from(map)))
         }
@@ -125,6 +131,22 @@ pub fn to_surrealql(value: &Value) -> String {
     value.to_sql()
 }
 
+/// Check if a SurrealQL snippet is safe from statement stacking and common injection patterns.
+///
+/// This function checks for the presence of semicolons (statement stacking),
+/// and comment markers (-- and /*) which can be used to bypass query logic.
+pub fn is_safe_surrealql_snippet(snippet: &str) -> bool {
+    // Check for semicolon (statement stacking)
+    if snippet.contains(';') {
+        return false;
+    }
+
+    // Check for comment markers
+    if snippet.contains("--") || snippet.contains("/*") {
+        return false;
+    }
+    true
+}
 /// Parse a single item into a SurrealQL Value
 pub fn parse_target(value: String) -> Result<String, String> {
     if value.contains(':') {
@@ -358,12 +380,37 @@ mod tests {
             assert!(error.contains("Failed to convert parameter 'test_param'"));
         }
     }
-}
+    #[test]
+    fn test_is_safe_surrealql_snippet() {
+        // Safe snippets
+        assert!(is_safe_surrealql_snippet("age > 18"));
+        assert!(is_safe_surrealql_snippet("name = 'John'"));
+        assert!(is_safe_surrealql_snippet(
+            "status IN ['published', 'draft']"
+        ));
+
+        // Unsafe snippets (semicolon)
+        assert!(!is_safe_surrealql_snippet("age > 18; DELETE person"));
+        assert!(!is_safe_surrealql_snippet(";"));
+
+        // Unsafe snippets (comments)
+        assert!(!is_safe_surrealql_snippet("age > 18 -- comment"));
+        assert!(!is_safe_surrealql_snippet("age > 18 /* comment */"));
+    }
 
     #[test]
     fn test_parse_target_diagnostic() {
-        println!("Table person -> {}", parse_target("person".to_string()).unwrap());
-        println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
-        println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
+        println!(
+            "Table person -> {}",
+            parse_target("person".to_string()).unwrap()
+        );
+        println!(
+            "Record person:john -> {}",
+            parse_target("person:john".to_string()).unwrap()
+        );
+        println!(
+            "String target -> {}",
+            to_surrealql(&Value::String("table_name".to_string()))
+        );
     }
-
+}
