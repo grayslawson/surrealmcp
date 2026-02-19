@@ -200,9 +200,7 @@ mod tests {
     #[test]
     fn test_extract_fallback_to_socket_addr() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080);
-        let mut req = Request::builder()
-            .body(Body::empty())
-            .unwrap();
+        let mut req = Request::builder().body(Body::empty()).unwrap();
         req.extensions_mut().insert(addr);
 
         let extractor = RobustIpKeyExtractor;
@@ -212,9 +210,7 @@ mod tests {
 
     #[test]
     fn test_extract_fallback_to_unknown() {
-        let req = Request::builder()
-            .body(Body::empty())
-            .unwrap();
+        let req = Request::builder().body(Body::empty()).unwrap();
         let extractor = RobustIpKeyExtractor;
         let result = extractor.extract(&req).unwrap();
         assert_eq!(result, "unknown");
@@ -223,10 +219,7 @@ mod tests {
     #[test]
     fn test_extract_empty_header_fallback() {
         // Test that empty strings and whitespace-only strings fall through
-        let cases = vec![
-            ("", "1.2.3.4"),
-            ("   ", "1.2.3.4"),
-        ];
+        let cases = vec![("", "1.2.3.4"), ("   ", "1.2.3.4")];
 
         for (val, expected) in cases {
             let req = Request::builder()
@@ -236,7 +229,11 @@ mod tests {
                 .unwrap();
             let extractor = RobustIpKeyExtractor;
             let result = extractor.extract(&req).unwrap();
-            assert_eq!(result, expected, "Failed to fall through for value '{}'", val);
+            assert_eq!(
+                result, expected,
+                "Failed to fall through for value '{}'",
+                val
+            );
         }
     }
 

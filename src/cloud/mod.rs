@@ -111,7 +111,6 @@ pub struct Client {
     base_url: String,
 }
 
-
 impl Default for Client {
     fn default() -> Self {
         Self::new()
@@ -787,7 +786,7 @@ mod tests {
     #[tokio::test]
     async fn test_authenticate_concurrency() {
         use tokio::time::{Duration, timeout};
-        let _ = timeout(Duration::from_secs(5), async {
+        timeout(Duration::from_secs(5), async {
             use axum::{Json, Router, routing::post};
             use std::sync::Arc;
             use std::sync::atomic::{AtomicUsize, Ordering};
