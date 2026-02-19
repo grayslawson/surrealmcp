@@ -9,9 +9,9 @@ pub mod server;
 pub mod tools;
 pub mod utils;
 
+use crate::server::ServerConfig;
 use anyhow::Result;
 use clap::Parser;
-use crate::server::ServerConfig;
 
 #[tokio::main]
 async fn main() -> Result<()> {
