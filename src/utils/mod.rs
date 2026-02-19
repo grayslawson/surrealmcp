@@ -276,13 +276,6 @@ mod tests {
         let val = result.unwrap();
         let val_str = format!("{:?}", val);
         println!("DEBUG: Complex Type Result: {}", val_str);
-        // Assuming 'info!' is a macro from a logging crate, otherwise it would be 'println!'
-        // For this context, I'll assume it's a placeholder for a print statement.
-        // If 'info!' is not defined, this line will cause a compilation error.
-        // As per instructions, I'm inserting faithfully.
-        // If `info!` is not available, this line should be removed or replaced with `println!`.
-        // Since `info!` is not imported, I'll comment it out to ensure compilation.
-        // info!("Complex Type Result: {}", val_str);
         assert!(val_str.contains("Bob"));
         assert!(val_str.contains("123 Main St"));
         assert!(val_str.contains("Anytown"));
@@ -333,7 +326,7 @@ mod tests {
         assert!(result.is_ok());
         let val = result.unwrap();
         let val_str = to_surrealql(&val);
-        assert!(val_str.contains("'hello'")); // Changed from "hello" to "'hello'" for to_surrealql output
+        assert!(val_str.contains("'hello'"));
         assert!(val_str.contains("42"));
         assert!(val_str.contains("false"));
         assert!(val_str.contains("NONE"));
@@ -346,11 +339,8 @@ mod tests {
 
     #[test]
     fn test_convert_json_to_surreal_error_message_format() {
-        // This test verifies that the error message includes the parameter name
-        // We'll use a malformed JSON string to trigger an error
         let malformed = serde_json::Value::String("invalid json {".to_string());
         let result = convert_json_to_surreal(malformed, "test_param");
-        // The current implementation might not fail on this input, so let's check if it succeeds
         if let Ok(val) = result {
             assert_eq!(to_surrealql(&val), "'invalid json {'");
         } else {
@@ -358,12 +348,67 @@ mod tests {
             assert!(error.contains("Failed to convert parameter 'test_param'"));
         }
     }
-}
 
     #[test]
-    fn test_parse_target_diagnostic() {
-        println!("Table person -> {}", parse_target("person".to_string()).unwrap());
-        println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
-        println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
+    fn test_is_safe_surrealql_snippet() {
+        assert!(is_safe_surrealql_snippet("age > 25"));
+        assert!(is_safe_surrealql_snippet("name = 'John Doe'"));
+        assert!(is_safe_surrealql_snippet("name = \"John Doe\""));
+        assert!(is_safe_surrealql_snippet("name = 'O\\'Reilly'"));
+        assert!(is_safe_surrealql_snippet("comment = 'This is a semicolon: ;'"));
+        assert!(is_safe_surrealql_snippet("comment = \"Semicolon here; as well\""));
+
+        // Unsafe snippets
+        assert!(!is_safe_surrealql_snippet("age > 25; DELETE FROM person"));
+        assert!(!is_safe_surrealql_snippet("'; DELETE FROM person"));
+        assert!(!is_safe_surrealql_snippet("age > 25; --"));
+
+        // Unclosed quotes (should be rejected for safety)
+        assert!(!is_safe_surrealql_snippet("name = 'John"));
+        assert!(!is_safe_surrealql_snippet("name = \"John"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_target_diagnostic() {
+    println!("Table person -> {}", parse_target("person".to_string()).unwrap());
+    println!("Record person:john -> {}", parse_target("person:john".to_string()).unwrap());
+    println!("String target -> {}", to_surrealql(&Value::String("table_name".to_string())));
+}
+
+/// Check if a SurrealQL snippet is safe from statement injection (semicolons)
+///
+/// This function verifies that the snippet does not contain any unquoted semicolons
+/// that could be used for statement stacking or SQL injection.
+pub fn is_safe_surrealql_snippet(snippet: &str) -> bool {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for c in snippet.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match c {
+            '\\' => {
+                escaped = true;
+            }
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+            }
+            ';' if !in_single_quote && !in_double_quote => {
+                return false;
+            }
+            _ => {}
+        }
     }
 
+    // Reject unclosed quotes as well for safety
+    !in_single_quote && !in_double_quote
+}
