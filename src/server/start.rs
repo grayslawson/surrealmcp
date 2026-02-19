@@ -47,7 +47,6 @@ pub struct ServerConfig {
 static ACTIVE_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 static TOTAL_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
 
-
 /// Start the MCP server based on the provided configuration
 pub async fn start_server(config: ServerConfig) -> Result<()> {
     let token = CancellationToken::new();
@@ -182,11 +181,13 @@ async fn start_unix_server(config: ServerConfig, token: CancellationToken) -> Re
         ..
     } = config;
     // Get the specified socket path
-    let socket_path = socket_path.as_deref().unwrap();
+    let socket_path = Path::new(
+        socket_path
+            .as_deref()
+            .expect("socket path must be provided when starting Unix server"),
+    );
     // Initialize structured logging and metrics
     init_logging_and_metrics(false);
-    // Get the specified socket path
-    let socket_path = Path::new(socket_path);
     // Remove existing socket file if it exists
     if socket_path.exists() {
         fs::remove_file(socket_path).await?;
